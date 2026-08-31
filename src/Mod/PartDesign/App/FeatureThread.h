@@ -47,12 +47,14 @@ public:
         MetricFine
     };
 
+    App::PropertyBool Threaded;
     App::PropertyLinkSub LateralFace;
     App::PropertyLinkSub StartPlane;
     App::PropertyLinkSub UpToGeometry;
     App::PropertyLength Depth;
     App::PropertyLength ThreadDepth;
     App::PropertyLength ThreadDiameter;
+    App::PropertyLength Diameter;
     App::PropertyLength ThreadPitch;
     App::PropertyEnumeration ThreadType;
     App::PropertyEnumeration ThreadTypeName;
@@ -69,6 +71,9 @@ public:
     App::PropertyBool ModelThread;
     App::PropertyBool CosmeticThread;
     App::PropertyBool IsInternal;
+    App::PropertyBool Tapered;
+    App::PropertyAngle TaperedAngle;
+
 
     /** @name methods override feature */
     //@{
@@ -82,9 +87,15 @@ public:
     }
     //@}
 
+    Base::Vector3d guessNormalDirection() const;
+    std::vector<gp_Pnt> getThreadLocations() const;
+    double getThreadPitch() const;
+    std::optional<gp_Pnt> getThreadOrigin() const;
+    std::optional<gp_Dir> getThreadNormal() const;
+
 protected:
     void onChanged(const App::Property* prop) override;
-
+    
 private:
     ThreadUtils threadUtils;
     void addThreadType();

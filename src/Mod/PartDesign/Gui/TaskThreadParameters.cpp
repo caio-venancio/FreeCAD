@@ -262,6 +262,18 @@ void TaskThreadParameters::changeEvent(QEvent* e)
     }
 }
 
+bool TaskThreadParameters::getModelThread() const
+{
+    // return ui->HoleType->currentIndex() == Threaded && ui->ModelThread->isChecked();
+    return ui->modelledThreadRadio->isChecked();
+}
+
+bool TaskThreadParameters::getCosmeticThreaded() const
+{
+    // return ui->HoleType->currentIndex() == Threaded && !ui->ModelThread->isChecked();
+    return ui->cosmeticThreadRadio->isChecked();
+}
+
 void TaskThreadParameters::apply()
 {
     auto pcThread = getObject<PartDesign::Thread>();
@@ -364,6 +376,9 @@ void TaskThreadParameters::onSelectionChanged(const Gui::SelectionChanges& msg)
         default:
             break;
     }
+
+    // cosmeticChanged();
+    // Base::Console().message("Setting modelthread 1!\n");
 }
 
 
@@ -477,12 +492,15 @@ void TaskThreadParameters::CustomClearanceCheckValuesChanged()
 
 void TaskThreadParameters::threadModelChanged()
 {
+    Base::Console().message("Mudando Threading agora.\n");
     if (auto thread = getObject<PartDesign::Thread>()) {
         if (sender() == ui->cosmeticThreadRadio) {
+            Base::Console().message("cosmetic.\n");
             thread->CosmeticThread.setValue(true);
             thread->ModelThread.setValue(false);
         }
         else {
+            Base::Console().message("not cosmetic.\n");
             thread->CosmeticThread.setValue(false);
             thread->ModelThread.setValue(true);
         }
@@ -497,6 +515,19 @@ void TaskThreadParameters::customThreadClearanceChanged(double value)
         recomputeFeature();
     }
 }
+
+// void TaskThreadParameters::cosmeticChanged()
+// {
+//     auto pcThread = getObject<PartDesign::Thread>();
+//     bool isModeled = getModelThread();
+//     bool isCosmetic = getCosmeticThreaded();
+//     // When the combobox is "Threaded", represent the thread either as
+//     // modeled geometry or as a cosmetic texture.
+//     // Set both properties explicitly.
+//     pcThread->ModelThread.setValue(isModeled);
+//     pcThread->CosmeticThread.setValue(isCosmetic);
+//     Base::Console().message("Setting modelthread 2!\n");
+// }
 
 void TaskThreadParameters::changedObject(const App::Document&, const App::Property& Prop)
 {

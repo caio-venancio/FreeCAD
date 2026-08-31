@@ -47,7 +47,7 @@ public:
     );
     App::DocumentObjectExecReturn* validateParameters(const App::PropertyLinkSub& LateralFace);
     bool isInternalFace(const App::PropertyLinkSub& faceProp, const TopoDS_Shape& solid);
-    gp_Vec getThreadZAxis(const App::PropertyLinkSub& LateralFace);
+    gp_Vec getThreadZAxis(const App::PropertyLinkSub& LateralFace) const;
     gp_Pnt getThreadAxisOrigin(const App::PropertyLinkSub& LateralFace);
     gp_Vec computePerpendicular(const gp_Vec&) const;
     gp_Pnt getThreadStartPoint(
@@ -74,10 +74,10 @@ public:
     std::vector<std::string> getThreadClass_BSW_Enums();
     std::vector<std::string> getThreadClass_BSF_Enums();
     std::vector<std::string> getThreadDirectionEnums();
-    std::vector<std::string> getThreadDiameters(const int threadType);
+    std::vector<std::string> getThreadDiameters(const int threadType) const;
     std::vector<std::string> getThreadMinorDiameters(const int threadType);
     double getMinorDiameter(const int threadType, const int size);
-    gp_Pnt getThreadStartPoint(const App::PropertyLinkSub& lateralFace, const gp_Dir& zDir);
+    gp_Pnt getThreadStartPoint(const App::PropertyLinkSub& lateralFace, const gp_Dir& zDir) const;
     gp_Dir getThreadAxisDir(const App::PropertyLinkSub& LateralFace);
     Part::TopoShape reduceExternalThreadBase(
         Part::TopoShape base,
@@ -88,7 +88,8 @@ public:
     );
     gp_Pnt getPlaneLineIntersection(const gp_Pln& plane, const gp_Lin& line);
     std::vector<gp_Pnt> findLineCurveIntersections(const gp_Lin& line, const BRepAdaptor_Curve& curve);
-    std::vector<std::string> getThreadPitches(const int threadType, const int threadDiameter);
+    std::vector<std::string> getThreadPitches(const int threadType, const int threadDiameter) const;
+    double getThreadPitch(const int threadType, const int threadDiameter, const int threadPitch) const;
     std::string getThreadDesignations(
         const int threadType,
         const int threadDiameter,
@@ -179,7 +180,7 @@ public:
     static std::optional<ThreadDefinition> findMetadata(App::Document* doc);
 
     std::vector<std::string> getThreadTypeEnums();
-    std::vector<std::string> getThreadTypeNameEnums();
+    std::vector<std::string> getThreadTypeNameEnums() const;
 
     const std::vector<ThreadDefinition>& getThreadDefinitions() const
     {

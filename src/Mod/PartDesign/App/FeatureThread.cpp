@@ -88,6 +88,12 @@ Thread::Thread()
     ADD_PROPERTY_TYPE(ThreadDesignation, ("---"), "Thread", App::Prop_None, "Name");
 
     ADD_PROPERTY_TYPE(LateralFace, (nullptr), "Thread", (App::PropertyType)(App::Prop_None), "LateralFace");
+
+    ADD_PROPERTY_TYPE(Threaded, (true), "Thread", App::Prop_None, "Threaded");
+
+    ADD_PROPERTY_TYPE(ModelThread, (false), "Thread", App::Prop_None, "Model actual thread");
+
+    ADD_PROPERTY_TYPE(CosmeticThread, (true), "Thread", App::Prop_None, "Texture the thread");
 }
 
 App::DocumentObjectExecReturn* Thread::execute()
@@ -190,85 +196,86 @@ App::DocumentObjectExecReturn* Thread::execute()
             base = reducedBase;
         }
 
-        // gp_Vec zDirFixed = zDir.Reversed();
+        // if (Threaded.getValue() && ModelThread.getValue()) {
+        if (ModelThread.getValue()) {
+            // gp_Vec zDirFixed = zDir.Reversed(); 
 
-        std::cout << "before makeThread\n";
-        TopoDS_Shape thread = threadUtils.makeThread(
-            xDir,
-            zDir,
-            length,
-            ThreadType.getValue(),
-            ThreadSize.getValue(),
-            ThreadDirection.getValue(),
-            ThreadClass,
-            IsInternal.getValue()
-        );
-        std::cout << "after makeThread\n";
-
-        // if(IsInternal.getValue()){
-        gp_Vec zDirUnit = zDir;
-        zDirUnit.Normalize();
-        gp_Pnt bottomPoint = startPoint.Translated(zDirUnit * length);
-        // gp_Pnt axisOrigin = threadUtils.getThreadAxisOrigin(LateralFace); // It's going to be
-        // used in getthreadstart
-        Base::Console().message(
-            "bottomPoint = (%f, %f, %f)\n",
-            bottomPoint.X(),
-            bottomPoint.Y(),
-            bottomPoint.Z()
-        );
-        gp_Trsf translation;
-        translation.SetTranslation(gp_Pnt(0.0, 0.0, 0.0), bottomPoint);
-        TopLoc_Location locTrans(translation);
-        thread.Move(locTrans);
-        // }
-
-        if (thread.IsNull()) {
-            return new App::DocumentObjectExecReturn(
-                QT_TRANSLATE_NOOP("Exception", "Thread error: Resulting shape is empty")
+            std::cout << "before makeThread\n";
+            TopoDS_Shape thread = threadUtils.makeThread(
+                    xDir, 
+                    zDir, 
+                    length, 
+                    ThreadType.getValue(),
+                    ThreadSize.getValue(),
+                    ThreadDirection.getValue(),
+                    ThreadClass,
+                    IsInternal.getValue()
             );
-        }
+            std::cout << "after makeThread\n";
 
-        Part::TopoShape protoThread(thread);
+            // if(IsInternal.getValue()){
+                gp_Vec zDirUnit = zDir;
+                zDirUnit.Normalize();
+                gp_Pnt bottomPoint = startPoint.Translated(zDirUnit * length);
+                // gp_Pnt axisOrigin = threadUtils.getThreadAxisOrigin(LateralFace); // It's going to be used in getthreadstart
+                Base::Console().message("bottomPoint = (%f, %f, %f)\n",
+                                bottomPoint.X(), bottomPoint.Y(), bottomPoint.Z());
+                gp_Trsf translation;
+                translation.SetTranslation(gp_Pnt(0.0, 0.0, 0.0), bottomPoint);
+                TopLoc_Location locTrans(translation);
+                thread.Move(locTrans);
+            // }
+                
+            if (thread.IsNull()) {
+                return new App::DocumentObjectExecReturn(
+                    QT_TRANSLATE_NOOP("Exception", "Thread error: Resulting shape is empty")
+                );
+            }
 
-        if (base.isNull()) {
-            Shape.setValue(protoThread);
-            return App::DocumentObject::StdReturn;
-        }
+            Part::TopoShape protoThread(thread);
 
-        const char* maker;
-        switch (getAddSubType()) {
-            case Additive:
-                maker = Part::OpCodes::Fuse;
-                break;
-            default:
-                maker = Part::OpCodes::Cut;
-        }
+            if (base.isNull()) {
+                Shape.setValue(protoThread);
+                return App::DocumentObject::StdReturn;
+            }
 
-        Part::TopoShape result;
-        try {
-            result.makeElementBoolean(maker, {base, protoThread}, nullptr, FuzzyTolerance.getValue());
-            result = getSolid(result);
-        }
-        catch (Standard_Failure& e) {
-            return new App::DocumentObjectExecReturn(
-                QT_TRANSLATE_NOOP("Exception", "Thread error: boolean operation failed")
-            );
-        }
-        catch (Base::Exception& e) {
-            return new App::DocumentObjectExecReturn(e.what());
-        }
+            const char* maker;
+            switch (getAddSubType()) {
+                case Additive:
+                    maker = Part::OpCodes::Fuse;
+                    break;
+                default:
+                    maker = Part::OpCodes::Cut;
+            }
 
-        result = refineShapeIfActive(result);
+            Part::TopoShape result;
+            try {
+                result.makeElementBoolean(maker, {base, protoThread}, nullptr, FuzzyTolerance.getValue());
+                result = getSolid(result);
+            }
+            catch (Standard_Failure& e) {
+                return new App::DocumentObjectExecReturn(
+                    QT_TRANSLATE_NOOP("Exception", "Thread error: boolean operation failed")
+                );
+            }
+            catch (Base::Exception& e) {
+                return new App::DocumentObjectExecReturn(e.what());
+            }
 
-        if (!isSingleSolidRuleSatisfied(result.getShape())) {
-            return new App::DocumentObjectExecReturn(QT_TRANSLATE_NOOP(
-                "Exception",
-                "Result has multiple solids: enable 'Allow Compound' in the active body."
-            ));
+            result = refineShapeIfActive(result);
+
+            if (!isSingleSolidRuleSatisfied(result.getShape())) {
+                return new App::DocumentObjectExecReturn(QT_TRANSLATE_NOOP(
+                    "Exception",
+                    "Result has multiple solids: enable 'Allow Compound' in the active body."
+                ));
+            }
+
+            this->Shape.setValue(result);
+        } else {
+            this->positionByBaseFeature();
+            this->Shape.setValue(base);
         }
-
-        this->Shape.setValue(result);
 
         return App::DocumentObject::StdReturn;
     }
@@ -436,6 +443,53 @@ void Thread::onChanged(const App::Property* prop)
 void Thread::addThreadType()
 {
     /*TODO*/
+}
+
+Base::Vector3d Thread::guessNormalDirection() const
+{
+    Base::Vector3d zDir(0.0, 0.0, 1.0);
+    return zDir;
+}
+
+std::vector<gp_Pnt> Thread::getThreadLocations() const
+{
+    try {
+        gp_Vec zDir = threadUtils.getThreadZAxis(LateralFace);
+        zDir.Normalize();
+        return {threadUtils.getThreadStartPoint(LateralFace, gp_Dir(zDir))};
+    }     
+    catch (const Standard_Failure&) { return {}; }
+    catch (const Base::Exception&) { return {}; }
+}
+
+double Thread::getThreadPitch() const
+{
+    return threadUtils.getThreadPitch(ThreadType.getValue(), ThreadSize.getValue(), ThreadPitch.getValue());
+}
+
+std::optional<gp_Dir> Thread::getThreadNormal() const
+{
+    try {
+        gp_Vec zDir = threadUtils.getThreadZAxis(LateralFace);
+        if (zDir.Magnitude() < Precision::Confusion()) {
+            return std::nullopt;
+        }
+        zDir.Normalize();
+        return gp_Dir(zDir);
+    }
+    catch (const Standard_Failure&) { return std::nullopt; }
+    catch (const Base::Exception&) { return std::nullopt; }
+}
+
+std::optional<gp_Pnt> Thread::getThreadOrigin() const
+{
+    try {
+        gp_Vec zDir = threadUtils.getThreadZAxis(LateralFace);
+        zDir.Normalize();
+        return threadUtils.getThreadStartPoint(LateralFace, gp_Dir(zDir));
+    }
+    catch (const Standard_Failure&) { return std::nullopt; }
+    catch (const Base::Exception&) { return std::nullopt; }
 }
 
 }  // namespace PartDesign

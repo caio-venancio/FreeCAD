@@ -66,6 +66,9 @@ public:
     void setButtons(const PartDesignGui::TaskDressUpParameters::selectionModes mode) override;
     void onSelectionChanged(const Gui::SelectionChanges& change) override;
     void QLineEditSelected(const QString& text);
+    bool getModelThread() const;
+    bool getCosmeticThreaded() const;
+    void cosmeticChanged();
 
     void apply() override;
 

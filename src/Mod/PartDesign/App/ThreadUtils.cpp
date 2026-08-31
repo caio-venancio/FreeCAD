@@ -448,7 +448,7 @@ std::vector<std::string> ThreadUtils::getThreadTypeEnums()
     return result;
 }
 
-std::vector<std::string> ThreadUtils::getThreadTypeNameEnums()
+std::vector<std::string> ThreadUtils::getThreadTypeNameEnums() const
 {
     std::vector<std::string> result;
 
@@ -482,7 +482,7 @@ std::vector<std::string> ThreadUtils::getThreadTypeName2Enums()
     return result;
 }
 
-std::vector<std::string> ThreadUtils::getThreadDiameters(const int threadType)
+std::vector<std::string> ThreadUtils::getThreadDiameters(const int threadType) const
 {
     std::vector<std::string> currentThreads = ThreadUtils::getThreadTypeNameEnums();
     std::string currentThread = currentThreads[threadType];
@@ -583,9 +583,8 @@ double ThreadUtils::getMinorDiameter(const int threadType, const int size)  // c
     return std::abs(std::stod(minorDiameters[size]));
 }
 
-std::vector<std::string> ThreadUtils::getThreadPitches(const int threadType, const int threadDiameter)
+std::vector<std::string> ThreadUtils::getThreadPitches(const int threadType, const int threadDiameter) const
 {
-
     std::vector<std::string> currentThreads = ThreadUtils::getThreadTypeNameEnums();
     std::string currentThread = currentThreads[threadType];
     int currentThreadTypeIndex = threadTypeFromString(currentThread);
@@ -633,6 +632,20 @@ std::vector<std::string> ThreadUtils::getThreadPitches(const int threadType, con
         ++index;
     }
     return pitches;
+}
+
+double ThreadUtils::getThreadPitch(const int threadType, const int threadDiameter, const int threadPitch) const
+{
+    std::vector<std::string> pitches = getThreadPitches(threadType, threadDiameter);
+    if (pitches.empty()){
+        return 0.0;
+    }
+    if (threadPitch > pitches.size()){
+        return 0.0;
+    }
+
+    //TODO: treat stod fails before returning
+    return std::stod(pitches[threadPitch]);
 }
 
 std::string ThreadUtils::getThreadDesignations(
@@ -1355,29 +1368,63 @@ gp_Pnt ThreadUtils::getThreadAxisOrigin(const App::PropertyLinkSub& LateralFace)
     throw Base::RuntimeError("Thread axis origin could not be calculated.");
 }
 
-gp_Vec ThreadUtils::getThreadZAxis(const App::PropertyLinkSub& LateralFace)
+// gp_Vec ThreadUtils::getThreadZAxis(const App::PropertyLinkSub& LateralFace) const
+// {
+//     TopoDS_Face threadedFace = getSelectedFace(LateralFace);
+//     Handle(Geom_Surface) surf = BRep_Tool::Surface(threadedFace);
+
+//     if (getFaceType(threadedFace) == FaceType::Cylinder) {
+//         Handle(Geom_CylindricalSurface) cyl = Handle(Geom_CylindricalSurface)::DownCast(surf);
+
+//         gp_Ax3 ax = cyl->Position();
+
+//         gp_Dir axis = ax.Direction();
+
+//         return gp_Vec(axis);
+//     }
+//     else if (getFaceType(threadedFace) == FaceType::Cone) {
+//         Handle(Geom_ConicalSurface) cone = Handle(Geom_ConicalSurface)::DownCast(surf);
+
+//         gp_Ax3 ax = cone->Position();
+
+//         return gp_Vec(ax.Direction());
+//     }
+
+//     throw Base::RuntimeError("zDir could not be calculated.");
+// }
+
+gp_Vec ThreadUtils::getThreadZAxis(const App::PropertyLinkSub& LateralFace) const
 {
+    if (LateralFace.getValue() == nullptr) {
+        throw Base::ValueError("LateralFace property is null or not assigned.");
+    }
+
     TopoDS_Face threadedFace = getSelectedFace(LateralFace);
+    if (threadedFace.IsNull()) {
+        throw Base::ValueError("LateralFace does not reference a valid shape/face.");
+    }
+
     Handle(Geom_Surface) surf = BRep_Tool::Surface(threadedFace);
+    if (surf.IsNull()) {
+        throw Base::ValueError("Surface geometry for LateralFace could not be retrieved.");
+    }
 
-    if (getFaceType(threadedFace) == FaceType::Cylinder) {
+    FaceType type = getFaceType(threadedFace);
+
+    if (type == FaceType::Cylinder) {
         Handle(Geom_CylindricalSurface) cyl = Handle(Geom_CylindricalSurface)::DownCast(surf);
-
-        gp_Ax3 ax = cyl->Position();
-
-        gp_Dir axis = ax.Direction();
-
-        return gp_Vec(axis);
+        if (!cyl.IsNull()) {
+            return gp_Vec(cyl->Position().Direction());
+        }
     }
-    else if (getFaceType(threadedFace) == FaceType::Cone) {
+    else if (type == FaceType::Cone) {
         Handle(Geom_ConicalSurface) cone = Handle(Geom_ConicalSurface)::DownCast(surf);
-
-        gp_Ax3 ax = cone->Position();
-
-        return gp_Vec(ax.Direction());
+        if (!cone.IsNull()) {
+            return gp_Vec(cone->Position().Direction());
+        }
     }
 
-    throw Base::RuntimeError("zDir could not be calculated.");
+    throw Base::RuntimeError("zDir could not be calculated: Face is neither a valid Cylinder nor Cone.");
 }
 
 double ThreadUtils::getThroughAllLength() const
@@ -1480,7 +1527,7 @@ std::optional<ThreadUtils::ThreadDefinition> ThreadUtils::ThreadLibrary::readThr
         return definition;
     }
     catch (...) {
-        // Base::Console().message("Closing a thread file 2!\n");
+        Base::Console().message("Closing a thread file 2!\n");
         App::GetApplication().closeDocument(doc->getName());
 
         if (oldDoc) {
@@ -1669,7 +1716,7 @@ void ThreadUtils::ThreadLibrary::findSpreadsheets(App::Document* doc, ThreadDefi
         }
     }
     if (!obj) {
-        Base::Console().message("No object found.\n");
+        // Base::Console(essage("No object found.\n");
         return;
     }
 
@@ -1684,7 +1731,7 @@ void ThreadUtils::ThreadLibrary::findSpreadsheets(App::Document* doc, ThreadDefi
     definition.tapDrills = std::move(tapDrills);
 }
 
-gp_Pnt ThreadUtils::getThreadStartPoint(const App::PropertyLinkSub& lateralFace, const gp_Dir& zDir)
+gp_Pnt ThreadUtils::getThreadStartPoint(const App::PropertyLinkSub& lateralFace, const gp_Dir& zDir) const
 {
     TopoDS_Face face = getSelectedFace(lateralFace);
 
@@ -1826,11 +1873,11 @@ static TopoDS_Shape getSelectedSubShape(const App::PropertyLinkSub& prop)
         return TopoDS_Shape();
     }
 
-    // Base::Console().message("getSelectedSubShape: obj name = %s\n", obj->getNameInDocument());
-    // Base::Console().message("getSelectedSubShape: obj type = %s\n", obj->getTypeId().getName());
+    Base::Console().message("getSelectedSubShape: obj name = %s\n", obj->getNameInDocument());
+    Base::Console().message("getSelectedSubShape: obj type = %s\n", obj->getTypeId().getName());
 
     const std::vector<std::string>& subs = prop.getSubValues();
-    // Base::Console().message("getSelectedSubShape: subs size = %zu\n", subs.size());
+    Base::Console().message("getSelectedSubShape: subs size = %zu\n", subs.size());
 
     if (obj->getTypeId().isDerivedFrom(Base::Type::fromName("Part::DatumPoint"))
         || obj->getTypeId().isDerivedFrom(Base::Type::fromName("Part::DatumLine"))
@@ -1903,11 +1950,13 @@ static TopoDS_Shape getSelectedSubShape(const App::PropertyLinkSub& prop)
 
     if (subs.empty() || subs.front().empty()) {
         // Base::Console().message("getSelectedSubShape: returning full shape\n");
+        // Base::Console().message("getSelectedSubShape: returning full shape\n");
         return topoShape.getShape();
     }
 
     TopoDS_Shape subShape;
     try {
+        // Base::Console().message("getSelectedSubShape: getting subshape '%s'\n", subs.front().c_str());
         // Base::Console().message("getSelectedSubShape: getting subshape '%s'\n", subs.front().c_str());
         subShape = topoShape.getSubShape(subs.front().c_str());
     }
@@ -1921,7 +1970,7 @@ static TopoDS_Shape getSelectedSubShape(const App::PropertyLinkSub& prop)
     }
 
     if (subShape.IsNull()) {
-        Base::Console().message("getSelectedSubShape: subShape is null\n");
+        // Base::Console().message("getSelectedSubShape: subShape is null\n");
         return TopoDS_Shape();
     }
 
@@ -2077,9 +2126,10 @@ gp_Pnt ThreadUtils::getThreadStartPoint(
             if (surfAdaptor.GetType() == GeomAbs_Plane) {
                 gp_Pln plane = surfAdaptor.Plane();
 
-                Base::Console().message("Getting intersection\n");
-                gp_Pnt intersection = getPlaneLineIntersection(plane, axisLine);
-                Base::Console().message("intersection.Z(): %lf\n", intersection.Z());
+                // Base::Console().message("Getting intersection\n");
+                gp_Pnt intersection =
+                    getPlaneLineIntersection(plane, axisLine);
+                // Base::Console().message("intersection.Z(): %lf\n", intersection.Z());
 
                 // TODO: verify if point is on the face if it is needed.
                 return intersection;
