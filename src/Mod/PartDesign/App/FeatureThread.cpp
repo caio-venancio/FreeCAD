@@ -94,6 +94,14 @@ Thread::Thread()
     ADD_PROPERTY_TYPE(ModelThread, (false), "Thread", App::Prop_None, "Model actual thread");
 
     ADD_PROPERTY_TYPE(CosmeticThread, (true), "Thread", App::Prop_None, "Texture the thread");
+
+    ADD_PROPERTY_TYPE(Tapered, (false), "Thread", App::Prop_None, "Tapered");
+
+    ADD_PROPERTY_TYPE(TaperedAngle, (90.0), "Thread", App::Prop_None, "Tapered angle");
+
+    ADD_PROPERTY_TYPE(Diameter, (0.0), "Thread", App::Prop_None, "Diameter");
+
+    ADD_PROPERTY_TYPE(IsInternal, (false), "Thread", App::Prop_None, "Thread is internal");
 }
 
 App::DocumentObjectExecReturn* Thread::execute()
@@ -127,9 +135,23 @@ App::DocumentObjectExecReturn* Thread::execute()
     }
 
     IsInternal.setValue(threadUtils.isInternalFace(LateralFace, base.getShape()));
-
     addSubType = IsInternal.getValue() ? FeatureAddSub::Subtractive : FeatureAddSub::Additive;
     Base::Console().message("isInternal?: %d\n", IsInternal.getValue());
+
+    double diameter = threadUtils.getLateralFaceDiameter(LateralFace);
+    Diameter.setValue(diameter);
+
+    double conicalAngle = threadUtils.getConicalAngle(LateralFace);
+    Base::Console().message("Conical Angle: %lf\n", conicalAngle);
+    // double nearestSize = 0.0;
+    // if (!IsInternal.getValue()) {
+        // nearestSize = threadUtils.findNearestThreadSize(ThreadType.getValue(), diameter);
+        // Diameter.setValue(nearestSize);
+    // }
+    // else {
+        // nearestSize = threadUtils.findNearestMinorThreadSize(ThreadType.getValue(), diameter);
+        // Diameter.setValue(nearestSize);
+    // }
 
     gp_Pnt startPoint = threadUtils.getThreadStartPoint(LateralFace, StartPlane);
     Base::Console()
@@ -154,7 +176,7 @@ App::DocumentObjectExecReturn* Thread::execute()
             /* TODO */
         }
         else if (method == "ThroughAll") {
-            length = threadUtils.getThroughAllLength();
+            length = threadUtils.getThroughAllLength(base);
         }
         else if (method == "UpToGeometry") {
             /* TODO */
@@ -209,7 +231,11 @@ App::DocumentObjectExecReturn* Thread::execute()
                     ThreadSize.getValue(),
                     ThreadDirection.getValue(),
                     ThreadClass,
-                    IsInternal.getValue()
+                    IsInternal.getValue(),
+                    Tapered.getValue(),
+                    TaperedAngle.getValue(),
+                    UseCustomThreadClearance.getValue(),
+                    CustomThreadClearance.getValue()
             );
             std::cout << "after makeThread\n";
 
@@ -304,19 +330,19 @@ void Thread::onChanged(const App::Property* prop)
             ThreadClass.setEnums(ThreadUtils::ThreadClass_None_Enums);
         }
         else if (type == "ISOMetricProfile") {
-            ThreadClass.setEnums(ThreadUtils::ThreadClass_ISOmetric_Enums);
+            ThreadClass.setEnums(threadUtils.getThreadClasses(ThreadType.getValue(), IsInternal.getValue()));
         }
         else if (type == "ISOMetricFineProfile") {
-            ThreadClass.setEnums(ThreadUtils::ThreadClass_ISOmetricfine_Enums);
+            ThreadClass.setEnums(threadUtils.getThreadClasses(ThreadType.getValue(), IsInternal.getValue()));
         }
         else if (type == "UNC") {
-            ThreadClass.setEnums(ThreadUtils::ThreadClass_UNC_Enums);
+            ThreadClass.setEnums(threadUtils.getThreadClasses(ThreadType.getValue(), IsInternal.getValue()));
         }
         else if (type == "UNF") {
-            ThreadClass.setEnums(ThreadUtils::ThreadClass_UNF_Enums);
+            ThreadClass.setEnums(threadUtils.getThreadClasses(ThreadType.getValue(), IsInternal.getValue()));
         }
         else if (type == "UNEF") {
-            ThreadClass.setEnums(ThreadUtils::ThreadClass_UNEF_Enums);
+            ThreadClass.setEnums(threadUtils.getThreadClasses(ThreadType.getValue(), IsInternal.getValue()));
         }
         else if (type == "BSP") {
             ThreadClass.setEnums(ThreadUtils::ThreadClass_None_Enums);
@@ -325,10 +351,10 @@ void Thread::onChanged(const App::Property* prop)
             ThreadClass.setEnums(ThreadUtils::ThreadClass_None_Enums);
         }
         else if (type == "BSW") {
-            ThreadClass.setEnums(ThreadUtils::ThreadClass_BSW_Enums);
+            ThreadClass.setEnums(threadUtils.getThreadClasses(ThreadType.getValue(), IsInternal.getValue()));
         }
         else if (type == "BSF") {
-            ThreadClass.setEnums(ThreadUtils::ThreadClass_BSF_Enums);
+            ThreadClass.setEnums(threadUtils.getThreadClasses(ThreadType.getValue(), IsInternal.getValue()));
         }
         else if (type == "ISOTyre") {
             ThreadClass.setEnums(ThreadUtils::ThreadClass_None_Enums);
@@ -434,6 +460,18 @@ void Thread::onChanged(const App::Property* prop)
 
         if (nearestSize >= 0 && nearestSize != ThreadSize.getValue()) {
             ThreadSize.setValue(nearestSize);
+        }
+    } else if (prop == &Tapered) {
+        if (Tapered.getValue()) {
+            TaperedAngle.setReadOnly(false);
+            bool isConical = threadUtils.isThreadConical(ThreadType.getValue());
+            if (isConical && TaperedAngle.getValue() == 90) {
+                TaperedAngle.setValue(threadUtils.getThreadProfileAngle());
+            }
+        }
+        else {
+            TaperedAngle.setValue(90);
+            TaperedAngle.setReadOnly(true);
         }
     }
 

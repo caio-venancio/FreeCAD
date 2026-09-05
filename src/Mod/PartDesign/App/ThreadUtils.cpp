@@ -25,6 +25,7 @@
 #include <BRep_Tool.hxx>
 #include <BRepTools.hxx>
 #include <BRepAdaptor_Surface.hxx>
+#include <BRepBndLib.hxx>
 #include <Geom_ConicalSurface.hxx>
 #include <Geom_CylindricalSurface.hxx>
 #include <Geom_Surface.hxx>
@@ -485,7 +486,7 @@ std::vector<std::string> ThreadUtils::getThreadTypeName2Enums()
 std::vector<std::string> ThreadUtils::getThreadDiameters(const int threadType) const
 {
     std::vector<std::string> currentThreads = ThreadUtils::getThreadTypeNameEnums();
-    std::string currentThread = currentThreads[threadType];
+    std::string currentThread = currentThreads[threadType]; //TODO: use getvaluefromstring instead
     int currentThreadTypeIndex = threadTypeFromString(currentThread);
     // Base::Console().message("real int: %d\n", currentThreadTypeIndex);
 
@@ -648,6 +649,49 @@ double ThreadUtils::getThreadPitch(const int threadType, const int threadDiamete
     return std::stod(pitches[threadPitch]);
 }
 
+std::vector<std::string> ThreadUtils::getThreadClasses(const int threadType, const bool isInternal) const
+{
+    std::vector<std::string> currentThreads = ThreadUtils::getThreadTypeNameEnums();
+    std::string currentThread = currentThreads[threadType]; //TODO: use getvaluefromstring instead
+    int currentThreadTypeIndex = threadTypeFromString(currentThread);
+    
+    std::vector<std::string> clearances;
+    const auto& definitions = getThreadDefinitions();
+    for (const auto& definition : definitions) {
+        if (definition.name == currentThread) {
+            if(isInternal){
+                clearances = definition.internalClearances;
+            } else {
+                clearances = definition.externalClearances;
+            }
+            break;
+        }
+    }
+    if (clearances.empty()) {
+        return {"None"};
+    }
+
+    return clearances;
+}
+
+bool ThreadUtils::isThreadConical(const int threadType) const
+{
+    std::vector<std::string> currentThreads = ThreadUtils::getThreadTypeNameEnums();
+    std::string currentThread = currentThreads[threadType];
+    int currentThreadTypeIndex = threadTypeFromString(currentThread);
+
+    bool isConical = false;
+    const auto& definitions = getThreadDefinitions();
+    for (const auto& definition : definitions) {
+        if (definition.name == currentThread) {
+            isConical = definition.isConical;
+            break;
+        }
+    }
+    
+    return isConical;
+}
+
 std::string ThreadUtils::getThreadDesignations(
     const int threadType,
     const int threadDiameter,
@@ -712,6 +756,12 @@ std::string ThreadUtils::getThreadDesignations(
     return "---";
 }
 
+double ThreadUtils::getThreadProfileAngle()
+{
+    // Both ISO 7-1 and ASME B1.20.1 define the same angle
+    return 90 - 1.79;
+}
+
 enum class FaceType
 {
     Invalid,
@@ -753,7 +803,8 @@ double ThreadUtils::getThreadClassClearance(
     double pitch = threadDescription[threadType][threadSize].pitch;
 
     // Calculate how much clearance to add based on Thread tolerance class and pitch
-    if (ThreadClass.getValueAsString()[1] == 'G') {
+    if (ThreadClass.getValueAsString()[1] == 'G' || 
+        ThreadClass.getValueAsString()[1] == 'g' ) {
         for (auto it : ThreadClass_ISOmetric_data) {
             double p = it[0];
             if (pitch <= p) {
@@ -819,7 +870,11 @@ TopoDS_Shape ThreadUtils::makeThread(
     const int threadSize,  // TODO: change to ThreadDiameterIndex
     const int leftHanded,
     App::PropertyEnumeration& ThreadClass,
-    const bool isInternalThread
+    const bool isInternalThread,
+    const bool tapered,
+    const double taperedAngle,
+    const bool UseCustomThreadClearance,
+    const double CustomThreadClearance
 )
 {
     // Base::Console().message("Rmaj: %lf | RmajC: %lf | Pitch: %lf | clearance: %lf\n", Rmaj,
@@ -855,14 +910,20 @@ TopoDS_Shape ThreadUtils::makeThread(
     // double Pitch = getThreadPitch();
     double Pitch = threadDescription[currentThreadTypeIndex][threadSize].pitch;
 
-    double clearance;  // clearance to be added on the diameter
-    // if (UseCustomThreadClearance.getValue()) {
-    // clearance = CustomThreadClearance.getValue() / 2;
-    // }
-    // else {
-    clearance = getThreadClassClearance(threadType, threadSize, ThreadClass) / 2;
-    // }
-    double RmajC = Rmaj + clearance;
+    double clearance;  // clearance to be added or subtracted on the diameter
+    if (UseCustomThreadClearance) {
+        clearance = CustomThreadClearance / 2;
+    }
+    else {
+        clearance = getThreadClassClearance(threadType, threadSize, ThreadClass) / 2;
+    }
+
+    double RmajC;
+    if (isInternalThread){
+        RmajC = Rmaj + clearance;
+    } else {
+        RmajC = Rmaj - clearance;
+    }
     double marginZ = 0.001;
 
     // start of comment
@@ -979,8 +1040,8 @@ TopoDS_Shape ThreadUtils::makeThread(
             }
         }
     }
-    // double helixAngle = Tapered.getValue() ? TaperedAngle.getValue() - 90 : 0.0;
-    double helixAngle = 0.0;
+    double helixAngle = tapered ?  90 - taperedAngle : 0.0;
+    // double helixAngle = 0.0;
     TopoDS_Shape helix = TopoShape().makeLongHelix(Pitch, helixLength, Rmaj, helixAngle, leftHanded);
 
     gp_Pnt origo(0.0, 0.0, 0.0);
@@ -1100,6 +1161,24 @@ static TopoDS_Face getSelectedFace(const App::PropertyLinkSub& faceProp)
     }
 
     return TopoDS::Face(subShape);
+}
+
+double ThreadUtils::getConicalAngle(const App::PropertyLinkSub& lateralFace)
+{
+    const TopoDS_Face& face = getSelectedFace(lateralFace);
+
+    if (getFaceType(face) == FaceType::Cylinder) {
+        return 0.0;
+    }
+    
+    if (getFaceType(face) == FaceType::Cone) {
+        Handle(Geom_Surface) surf = BRep_Tool::Surface(face);
+        if (auto con = Handle(Geom_ConicalSurface)::DownCast(surf)) {
+            return std::abs(con->SemiAngle());
+        }
+    }
+
+    return 0.0;
 }
 
 double ThreadUtils::getCylinderDiameter(const TopoDS_Face& face)
@@ -1368,31 +1447,6 @@ gp_Pnt ThreadUtils::getThreadAxisOrigin(const App::PropertyLinkSub& LateralFace)
     throw Base::RuntimeError("Thread axis origin could not be calculated.");
 }
 
-// gp_Vec ThreadUtils::getThreadZAxis(const App::PropertyLinkSub& LateralFace) const
-// {
-//     TopoDS_Face threadedFace = getSelectedFace(LateralFace);
-//     Handle(Geom_Surface) surf = BRep_Tool::Surface(threadedFace);
-
-//     if (getFaceType(threadedFace) == FaceType::Cylinder) {
-//         Handle(Geom_CylindricalSurface) cyl = Handle(Geom_CylindricalSurface)::DownCast(surf);
-
-//         gp_Ax3 ax = cyl->Position();
-
-//         gp_Dir axis = ax.Direction();
-
-//         return gp_Vec(axis);
-//     }
-//     else if (getFaceType(threadedFace) == FaceType::Cone) {
-//         Handle(Geom_ConicalSurface) cone = Handle(Geom_ConicalSurface)::DownCast(surf);
-
-//         gp_Ax3 ax = cone->Position();
-
-//         return gp_Vec(ax.Direction());
-//     }
-
-//     throw Base::RuntimeError("zDir could not be calculated.");
-// }
-
 gp_Vec ThreadUtils::getThreadZAxis(const App::PropertyLinkSub& LateralFace) const
 {
     if (LateralFace.getValue() == nullptr) {
@@ -1427,10 +1481,20 @@ gp_Vec ThreadUtils::getThreadZAxis(const App::PropertyLinkSub& LateralFace) cons
     throw Base::RuntimeError("zDir could not be calculated: Face is neither a valid Cylinder nor Cone.");
 }
 
-double ThreadUtils::getThroughAllLength() const
+double ThreadUtils::getThroughAllLength(TopoShape base) const
 {
-    /* TODO */
-    return 2.02;
+    Bnd_Box box;
+    
+    if (!base.isNull()) {
+        BRepBndLib::Add(base.getShape(), box);
+    }
+    
+    box.SetGap(0.0);
+    
+    // The diagonal of the bounding box, plus 1% extra to eliminate risk of
+    // co-planar issues, gives a length that is guaranteed to go through all.
+    // The result is multiplied by 2 for the guarantee to work also for the midplane option.
+    return 2.02 * sqrt(box.SquareExtent());
 }
 
 ThreadUtils::ThreadLibrary::ThreadLibrary()
@@ -1646,89 +1710,113 @@ std::optional<ThreadUtils::ThreadDefinition> ThreadUtils::findMetadata(App::Docu
 
     // Base::Console().message("Returning Metadata!\n");
 
+    // isConical
+    auto* propIsConical = varset->getPropertyByName("Conical");
+    if (propIsConical) {
+        auto* isConicalProp = dynamic_cast<App::PropertyBool*>(propIsConical);
+        if (isConicalProp) {
+            definition.isConical = isConicalProp->getValue();
+        } else {
+            Base::Console().log("Property 'isConical' found in VarSet but is not bool. Defaulting to false.\n");
+            definition.isConical = false;
+        }
+    } else {
+        definition.isConical = false;
+    }
+
     return definition;
 }
 
 #include <Mod/Spreadsheet/App/Sheet.h>
+#include <map>
 
 void ThreadUtils::ThreadLibrary::findSpreadsheets(App::Document* doc, ThreadDefinition& definition)
 {
-    // Base::Console().message("Reading spreadsheets\n");
     std::vector<std::string> sizes;
     std::vector<std::string> minorDiameters;
     std::vector<std::string> pitches;
     std::vector<std::string> designations;
     std::vector<std::string> tapDrills;
+    std::vector<std::string> internalClearances;
+    std::vector<std::string> externalClearances;
 
-    // App::DocumentObject* obj = doc->getObject("InternalSpreadsheet");
     App::DocumentObject* obj = doc->getObject("Spreadsheet");
 
-    for (auto* obj : doc->getObjects()) {
-        if (obj && obj->getTypeId().isDerivedFrom(Spreadsheet::Sheet::getClassTypeId())) {
-            auto* sheet = static_cast<Spreadsheet::Sheet*>(obj);
-            // usar sheet
+    static const std::map<std::string, std::vector<std::string>*> columnTargets = {
+        {"designation",    &designations},
+        {"size",           &sizes},
+        {"minordiameter",  &minorDiameters},
+        {"pitch",          &pitches},
+        {"tapdrill",       &tapDrills},
+        {"internalclearance", &internalClearances},
+        {"externalclearance", &externalClearances}
+    };
+
+    auto sanitizeString = [](std::string str, bool lower) -> std::string {
+        str.erase(std::remove(str.begin(), str.end(), '\''), str.end());
+        str.erase(std::remove(str.begin(), str.end(), '\"'), str.end());
+        if(lower) std::transform(str.begin(), str.end(), str.begin(), ::tolower);
+        return str;
+    };
+
+    for (auto* docObj : doc->getObjects()) {
+        if (docObj && docObj->getTypeId().isDerivedFrom(Spreadsheet::Sheet::getClassTypeId())) {
+            auto* sheet = static_cast<Spreadsheet::Sheet*>(docObj);
             auto [start, end] = sheet->getUsedRange();
 
-            Base::Console()
-                .message("Start: %s | End: %s\n", start.toString().c_str(), end.toString().c_str());
+            std::map<std::string, int> headerToCol;
+
+            for (int col = start.col(); col <= end.col(); ++col) {
+                if (auto* cell = sheet->getCell(App::CellAddress(0, col))) {
+                    std::string headerName;
+                    if (cell->getStringContent(headerName) && !headerName.empty()) {
+                        std::string cleanHeader = sanitizeString(headerName, true);
+                        headerToCol[cleanHeader] = col;
+                    }
+                }
+            }
+
+            std::map<std::string, int> resolvedColumns;
+            for (const auto& [name, target] : columnTargets) {
+                auto it = headerToCol.find(name);
+                if (it != headerToCol.end()) {
+                    resolvedColumns[name] = it->second;
+                } else {
+                    Base::Console().warning(
+                        "Column '%s' not found in spreadsheet header.\n", name.c_str()
+                    );
+                }
+            }
 
             for (int row = 1; row <= end.row(); ++row) {
-                // Column A - Designation
-                if (auto* cell = sheet->getCell(App::CellAddress(row, 0))) {
-                    std::string value;
-                    if (cell->getStringContent(value) && !value.empty()) {
-                        designations.push_back(value);
+                for (const auto& [name, target] : columnTargets) {
+                    auto colIt = resolvedColumns.find(name);
+                    if (colIt == resolvedColumns.end()) {
+                        continue;
                     }
-                }
 
-                // Column B - Size
-                if (auto* cell = sheet->getCell(App::CellAddress(row, 1))) {
-                    std::string value;
-                    if (cell->getStringContent(value) && !value.empty()) {
-                        sizes.push_back(value);
-                    }
-                }
-
-                // Column C - minorDiameter
-                if (auto* cell = sheet->getCell(App::CellAddress(row, 2))) {
-                    std::string value;
-                    if (cell->getStringContent(value) && !value.empty()) {
-                        minorDiameters.push_back(value);
-                    }
-                }
-
-                // Column D - Pitch
-                if (auto* cell = sheet->getCell(App::CellAddress(row, 3))) {
-                    std::string value;
-                    if (cell->getStringContent(value) && !value.empty()) {
-                        pitches.push_back(value);
-                    }
-                }
-
-                // Column E - Tap Drill
-                if (auto* cell = sheet->getCell(App::CellAddress(row, 4))) {
-                    std::string value;
-                    if (cell->getStringContent(value) && !value.empty()) {
-                        tapDrills.push_back(value);
+                    if (auto* cell = sheet->getCell(App::CellAddress(row, colIt->second))) {
+                        std::string value;
+                        if (cell->getStringContent(value) && !value.empty()) {
+                            target->push_back(sanitizeString(value, false));
+                        }
                     }
                 }
             }
         }
     }
+
     if (!obj) {
-        // Base::Console(essage("No object found.\n");
         return;
     }
 
-    // Base::Console().message("designations.size: %d\n", designations.size());
-    // Base::Console().message("sizes.size: %d\n", sizes.size());
-    // Base::Console().message("pitches.size: %d\n", pitches.size());
-    // Base::Console().message("tapDrills.size: %d\n", tapDrills.size());
     definition.designations = std::move(designations);
     definition.sizes = std::move(sizes);
     definition.minorDiameters = std::move(minorDiameters);
     definition.pitches = std::move(pitches);
     definition.tapDrills = std::move(tapDrills);
+    definition.internalClearances = std::move(internalClearances);
+    definition.externalClearances = std::move(externalClearances);
 }
 
 gp_Pnt ThreadUtils::getThreadStartPoint(const App::PropertyLinkSub& lateralFace, const gp_Dir& zDir) const

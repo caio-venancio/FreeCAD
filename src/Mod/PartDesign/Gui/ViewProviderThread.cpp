@@ -80,6 +80,14 @@ using namespace PartDesignGui;
 
 PROPERTY_SOURCE(PartDesignGui::ViewProviderThread, PartDesignGui::ViewProviderDressUp)
 
+ViewProviderThread::ViewProviderThread()
+    : textureExtension(std::make_unique<Gui::ViewProviderTextureExtension>())
+{
+    sPixmap = "PartDesign_Thread.svg";
+    menuName = tr("Thread Parameters");
+}
+
+
 // ViewProviderThread::~ViewProviderThread() = default;
 
 // bool ViewProviderHole::onDelete(const std::vector<std::string>& arg)
@@ -139,92 +147,6 @@ void ViewProviderThread::updateData(const App::Property* prop)
     // Base::Console().message("I'm ending!!!\n");
 }
 
-// SoSeparator* ViewProviderThread::createThreadTextureSeparator()
-// {
-//     auto* pcThread = getObject<PartDesign::Thread>();
-//     if (!pcThread) {
-//         return nullptr;
-//     }
-    
-//     gp_Pnt threadOriginPnt;
-//     auto threadOriginOpt = getThreadOrigin(pcThread);
-//     if(!threadOriginOpt.has_value()){
-//         return nullptr;
-//     }
-//     threadOriginPnt = *threadOriginOpt;
-
-//     std::vector<SbVec3f> vertices;
-//     std::vector<SbVec3f> normals;
-//     std::vector<int> indices;
-//     std::vector<SbVec2f> uvs;
-
-//     if (!generateBoreMeshData(pcThread, threadOriginPnt, vertices, normals, indices, uvs)
-//         || vertices.empty() || normals.empty() || indices.empty() || uvs.empty()) {
-//         return nullptr;
-//     }
-
-//     // Create subtree
-//     auto* threadSep = new SoSeparator();
-//     threadSep->ref();
-
-//     // The face is selectable but not the texture
-//     auto* pickStyle = new SoPickStyle();
-//     pickStyle->style = SoPickStyle::UNPICKABLE;
-//     threadSep->addChild(pickStyle);
-
-//     // Avoid flicker on transparent objects
-//     auto* tt = new SoTransparencyType();
-//     tt->value = SoTransparencyType::DELAYED_BLEND;
-//     threadSep->addChild(tt);
-
-//     // End Clipping plane
-//     m_endThreadClipper = new SoClipPlane();
-//     threadSep->addChild(m_endThreadClipper);
-
-//     // Material
-//     auto* mat = new SoMaterial();
-//     textureExtension->setCoinAppearance(mat, getGlobalMaterial());
-//     threadSep->addChild(mat);
-
-//     // Texture
-//     auto* threadTexture = new SoTexture2();
-//     threadTexture->filename.setValue(":/images/ThreadOverlay.png");
-//     threadTexture->wrapS = SoTexture2::REPEAT;
-//     threadTexture->wrapT = SoTexture2::REPEAT;
-//     threadSep->addChild(threadTexture);
-
-//     // --- Texture transform for flipping ---
-//     m_textureTransform = new SoTexture2Transform();
-//     updateThreadDirection(pcThread);  // apply initial direction
-//     threadSep->addChild(m_textureTransform);
-
-//     // Texcoords / normals / geometry
-//     auto* tc = new SoTextureCoordinate2();
-//     tc->point.setValues(0, (int)uvs.size(), uvs.data());
-//     threadSep->addChild(tc);
-
-//     auto* nb = new SoNormalBinding();
-//     nb->value = SoNormalBinding::PER_VERTEX_INDEXED;
-//     threadSep->addChild(nb);
-
-//     auto* ns = new SoNormal();
-//     ns->vector.setValues(0, (int)normals.size(), normals.data());
-//     threadSep->addChild(ns);
-
-//     auto* coords = new SoCoordinate3();
-//     coords->point.setValues(0, (int)vertices.size(), vertices.data());
-//     threadSep->addChild(coords);
-
-//     auto* faces = new SoIndexedFaceSet();
-//     faces->coordIndex.setValues(0, (int)indices.size(), indices.data());
-//     threadSep->addChild(faces);
-
-//     updateThreadClipper(pcThread);
-//     applyThreadPhaseOffset(pcThread);
-
-//     return threadSep;
-// }
-
 SoSeparator* ViewProviderThread::createThreadTextureSeparator()
 {
     Base::Console().message("[createThreadTextureSeparator]: Starting texture separator creation...\n");
@@ -264,12 +186,12 @@ SoSeparator* ViewProviderThread::createThreadTextureSeparator()
     // Create subtree
     auto* threadSep = new SoSeparator();
     threadSep->ref();
-
+    
     // The face is selectable but not the texture
     auto* pickStyle = new SoPickStyle();
     pickStyle->style = SoPickStyle::UNPICKABLE;
     threadSep->addChild(pickStyle);
-
+    
     // Avoid flicker on transparent objects
     auto* tt = new SoTransparencyType();
     tt->value = SoTransparencyType::DELAYED_BLEND;
@@ -280,8 +202,15 @@ SoSeparator* ViewProviderThread::createThreadTextureSeparator()
     threadSep->addChild(m_endThreadClipper);
 
     // Material
+    Base::Console().message("[createThreadTextureSeparator]: Setting up material...\n");
     auto* mat = new SoMaterial();
-    textureExtension->setCoinAppearance(mat, getGlobalMaterial());
+    if (textureExtension) {
+        App::Material globalMat = getGlobalMaterial();
+        Base::Console().message("[createThreadTextureSeparator]: Applying coin appearance from textureExtension...\n");
+        textureExtension->setCoinAppearance(mat, globalMat);
+    } else {
+        Base::Console().warning("[createThreadTextureSeparator]: textureExtension pointer is NULL! Skipping appearance setup.\n");
+    }
     threadSep->addChild(mat);
 
     // Texture
@@ -355,59 +284,103 @@ void ViewProviderThread::applyThreadPhaseOffset(const PartDesign::Thread* pcThre
     m_textureTransform->translation.setValue(SbVec2f(phase, 0.0F));
 }
 
-void ViewProviderThread::updateThreadClipper(const PartDesign::Thread* pcThread)
-{
-//     if (!pcHole || pcHole->isRecomputing() || !m_endThreadClipper) {
+// void ViewProviderThread::updateThreadClipper(const PartDesign::Thread* pcThread)
+// {
+//     if (!pcThread || pcThread->isRecomputing() || !m_endThreadClipper) {
 //         return;
 //     }
-//     std::string theadDepthType = pcHole->ThreadDepthType.getValueAsString();
+//     std::string theadDepthType = pcThread->ThreadDepthType.getValueAsString();
 //     if (theadDepthType == "Hole depth") {
 //         m_endThreadClipper->on = FALSE;
 //         return;
 //     }
 //     m_endThreadClipper->on = TRUE;
 
-    if (!pcThread || pcThread->isRecomputing() || !m_endThreadClipper) {
+//     auto threadNormalOpt = getThreadNormal(pcThread);
+//     if (!threadNormalOpt.has_value()){
+//         return;
+//     }
+//     gp_Dir threadNormalAxis = *threadNormalOpt;
+
+//     auto threadOriginOpt = getThreadOrigin(pcThread);
+//     if (!threadOriginOpt.has_value()) {
+//         return;
+//     }
+//     gp_Pnt threadOriginPnt = *threadOriginOpt;
+
+//     gp_Pnt endPlanePnt = threadOriginPnt.Translated(
+//         gp_Vec(threadNormalAxis) * -pcThread->ThreadDepth.getValue()
+//     );
+
+//     SbVec3f endPlanePoint = Base::convertTo<SbVec3f>(endPlanePnt);
+//     SbVec3f endPlaneNormal = Base::convertTo<SbVec3f>(threadNormalAxis);
+
+//     // Update the end thread clipper plane
+//     m_endThreadClipper->plane.setValue(SbPlane(endPlaneNormal, endPlanePoint));
+// }
+
+void ViewProviderThread::updateThreadClipper(const PartDesign::Thread* pcThread)
+{
+    Base::Console().message("[updateThreadClipper]: Starting thread clipper update...\n");
+
+    if (!pcThread) {
+        Base::Console().warning("[updateThreadClipper]: Thread object is null -> Aborting\n");
         return;
     }
-    std::string theadDepthType = pcThread->ThreadDepthType.getValueAsString();
-    if (theadDepthType == "Hole depth") {
+
+    if (pcThread->isRecomputing()) {
+        Base::Console().message("[updateThreadClipper]: Thread is currently recomputing -> Aborting\n");
+        return;
+    }
+
+    if (!m_endThreadClipper) {
+        Base::Console().warning("[updateThreadClipper]: m_endThreadClipper is null -> Aborting\n");
+        return;
+    }
+
+    std::string theadDepthType;
+    try {
+        theadDepthType = pcThread->ThreadDepthType.getValueAsString();
+        Base::Console().message("[updateThreadClipper]: ThreadDepthType value = '%s'\n", theadDepthType.c_str());
+    }
+    catch (const std::exception& e) {
+        Base::Console().warning("[updateThreadClipper]: Failed to read ThreadDepthType enum: %s -> Disabling clipper\n", e.what());
         m_endThreadClipper->on = FALSE;
         return;
     }
+    catch (...) {
+        Base::Console().warning("[updateThreadClipper]: Unknown exception while reading ThreadDepthType enum -> Disabling clipper\n");
+        m_endThreadClipper->on = FALSE;
+        return;
+    }
+
+    if (theadDepthType == "Hole depth") {
+        Base::Console().message("[updateThreadClipper]: Depth type is 'Hole depth' -> Turning clipper OFF\n");
+        m_endThreadClipper->on = FALSE;
+        return;
+    }
+
     m_endThreadClipper->on = TRUE;
 
-//     auto holeNormalOpt = getHoleNormal(pcHole);
-//     if (!holeNormalOpt.has_value()) {
-//         return;
-//     }
-//     gp_Dir holeNormalAxis = *holeNormalOpt;
-
     auto threadNormalOpt = getThreadNormal(pcThread);
-    if (!threadNormalOpt.has_value()){
+    if (!threadNormalOpt.has_value()) {
+        Base::Console().warning("[updateThreadClipper]: Failed to retrieve thread normal axis -> Aborting\n");
         return;
     }
     gp_Dir threadNormalAxis = *threadNormalOpt;
 
-//     auto holeOriginOpt = getHoleOrigin(pcHole);
-//     if (!holeOriginOpt.has_value()) {
-//         return;
-//     }
-//     gp_Pnt holeOriginPnt = *holeOriginOpt;
-
     auto threadOriginOpt = getThreadOrigin(pcThread);
     if (!threadOriginOpt.has_value()) {
+        Base::Console().warning("[updateThreadClipper]: Failed to retrieve thread origin -> Aborting\n");
         return;
     }
     gp_Pnt threadOriginPnt = *threadOriginOpt;
 
-    // Compute clipping plane origin at the end of the threaded portion
-//     gp_Pnt endPlanePnt = holeOriginPnt.Translated(
-//         gp_Vec(holeNormalAxis) * -pcHole->ThreadDepth.getValue()
-//     );
+    double threadDepthValue = pcThread->ThreadDepth.getValue();
+    Base::Console().message("[updateThreadClipper]: Calculating clipping plane with depth = %.3f...\n", threadDepthValue);
 
     gp_Pnt endPlanePnt = threadOriginPnt.Translated(
-        gp_Vec(threadNormalAxis) * -pcThread->ThreadDepth.getValue()
+        gp_Vec(threadNormalAxis) * -threadDepthValue
     );
 
     SbVec3f endPlanePoint = Base::convertTo<SbVec3f>(endPlanePnt);
@@ -415,6 +388,7 @@ void ViewProviderThread::updateThreadClipper(const PartDesign::Thread* pcThread)
 
     // Update the end thread clipper plane
     m_endThreadClipper->plane.setValue(SbPlane(endPlaneNormal, endPlanePoint));
+    Base::Console().message("[updateThreadClipper]: Clipper plane updated successfully (OFF at depth limit)\n");
 }
 
 std::optional<gp_Dir> ViewProviderThread::getThreadNormal(const PartDesign::Thread* pcThread) const
@@ -434,94 +408,6 @@ std::vector<gp_Pnt> ViewProviderThread::getThreadLocations(const PartDesign::Thr
     }
     return pcThread->getThreadLocations();
 }
-
-// std::vector<TopoDS_Face> ViewProviderThread::collectBoreFaces(const PartDesign::Thread* pcThread) const
-// {
-//     std::vector<TopoDS_Face> boreFaces;
-//     if (!pcThread) {
-//         return boreFaces;
-//     }
-
-//     TopoDS_Shape bodyShape = getCurrentlyVisibleShape(pcThread);
-//     if (bodyShape.IsNull()) {
-//         return boreFaces;
-//     }
-
-//     auto threadNormalOpt = getThreadNormal(pcThread);
-//     if (!threadNormalOpt.has_value()) {
-//         return boreFaces;
-//     }
-//     gp_Dir threadAxis = *threadNormalOpt;
-
-//     std::vector<gp_Pnt> validLocations = getThreadLocations(pcThread);
-//     if (validLocations.empty()) {
-//         return boreFaces;
-//     }
-
-//     const double holeRadius = pcThread->Diameter.getValue() / 2.0;
-//     const double distTolerance = 2 * Precision::Confusion();
-//     const bool isTapered = pcThread->Tapered.getValue();
-//     const double taperSemiAngleRad = isTapered
-//         ? Base::toRadians(90 - pcThread->TaperedAngle.getValue())
-//         : 0.0;
-
-//     for (TopExp_Explorer expl(bodyShape, TopAbs_FACE); expl.More(); expl.Next()) {
-//         const TopoDS_Face& face = TopoDS::Face(expl.Current());
-//         Handle(Geom_Surface) surf = BRep_Tool::Surface(face);
-//         if (surf.IsNull()) {
-//             continue;
-//         }
-
-//         // Unwrap trimmed surfaces
-//         if (surf->IsKind(STANDARD_TYPE(Geom_RectangularTrimmedSurface))) {
-//             surf = Handle(Geom_RectangularTrimmedSurface)::DownCast(surf)->BasisSurface();
-//         }
-
-//         gp_Ax1 axis;
-//         bool isMatch = false;
-
-//         if (!isTapered) {
-//             if (!surf->IsKind(STANDARD_TYPE(Geom_CylindricalSurface))) {
-//                 continue;
-//             }
-//             auto cyl = Handle(Geom_CylindricalSurface)::DownCast(surf);
-//             if (std::abs(cyl->Radius() - holeRadius) >= Precision::Confusion()) {
-//                 continue;
-//             }
-//             axis = cyl->Axis();
-//         }
-//         else {
-//             if (!surf->IsKind(STANDARD_TYPE(Geom_ConicalSurface))) {
-//                 continue;
-//             }
-//             auto con = Handle(Geom_ConicalSurface)::DownCast(surf);
-//             double angle = std::abs(con->SemiAngle());
-//             if (std::abs(angle - taperSemiAngleRad) >= Precision::Angular()) {
-//                 continue;
-//             }
-//             axis = con->Axis();
-//         }
-
-//         for (const auto& loc : validLocations) {
-//             if (gp_Lin(axis).Distance(loc) < distTolerance) {
-//                 isMatch = true;
-//                 break;
-//             }
-//         }
-
-//         if (!isMatch) {
-//             continue;
-//         }
-
-//         if (!axis.Direction().IsParallel(threadAxis, Precision::Angular())) {
-//             continue;
-//         }
-
-//         boreFaces.push_back(face);
-//     }
-
-//     return boreFaces;
-// }
 
 std::vector<TopoDS_Face> ViewProviderThread::collectBoreFaces(const PartDesign::Thread* pcThread) const
 {
@@ -647,16 +533,32 @@ std::vector<TopoDS_Face> ViewProviderThread::collectBoreFaces(const PartDesign::
 
 App::Material ViewProviderThread::getGlobalMaterial()
 {
+    Base::Console().message("[getGlobalMaterial]: Fetching global material...\n");
+
     if (auto* materialProp = dynamic_cast<App::PropertyMaterial*>(getPropertyByName("Material"))) {
+        Base::Console().message("[getGlobalMaterial]: Found material directly on Thread ViewProvider\n");
         return materialProp->getValue();
     }
-    if (auto* bodyVp = getBodyViewProvider()) {
-        if (auto* materialProp
-            = freecad_cast<App::PropertyMaterial*>(bodyVp->getPropertyByName("Material"))) {
-            return materialProp->getValue();
-        }
+    else {
+        Base::Console().message("[getGlobalMaterial]: Material property not found on Thread ViewProvider\n");
     }
 
+    if (auto* bodyVp = getBodyViewProvider()) {
+        Base::Console().message("[getGlobalMaterial]: Found parent Body ViewProvider, checking material...\n");
+        if (auto* materialProp
+            = freecad_cast<App::PropertyMaterial*>(bodyVp->getPropertyByName("Material"))) {
+            Base::Console().message("[getGlobalMaterial]: Found material on parent Body ViewProvider\n");
+            return materialProp->getValue();
+        }
+        else {
+            Base::Console().message("[getGlobalMaterial]: Material property not found on parent Body ViewProvider\n");
+        }
+    }
+    else {
+        Base::Console().warning("[getGlobalMaterial]: Body ViewProvider is NULL!\n");
+    }
+
+    Base::Console().message("[getGlobalMaterial]: Falling back to App::Material::getDefaultAppearance()\n");
     return App::Material::getDefaultAppearance();
 }
 
@@ -793,114 +695,6 @@ void ViewProviderThread::handleSeamTriangle(
         triIndices[2] = newIdx;
     }
 }
-
-// bool ViewProviderThread::generateBoreMeshData(
-//     const PartDesign::Thread* pcThread,
-//     const gp_Pnt& threadOriginPnt,
-//     std::vector<SbVec3f>& vertices,
-//     std::vector<SbVec3f>& normals,
-//     std::vector<int>& indices,
-//     std::vector<SbVec2f>& uvs
-// )
-// {
-//     const double threadPitch = pcThread->getThreadPitch();
-//     if (threadPitch == 0.0) {
-//         return false;
-//     }
-
-//     vertices.clear();
-//     normals.clear();
-//     indices.clear();
-//     uvs.clear();
-
-//     const auto& boreFaces = collectBoreFaces(pcThread);
-//     if (boreFaces.empty()) {
-//         return false;
-//     }
-
-//     auto threadNormalOpt = getThreadNormal(pcThread);
-//     if (!threadNormalOpt.has_value()) {
-//         return false;
-//     }
-//     gp_Dir threadNormalAxis = *threadNormalOpt;
-
-//     double minProj = std::numeric_limits<double>::max();
-//     double maxProj = std::numeric_limits<double>::lowest();
-
-//     // --- Compute projection bounds ---
-//     for (const auto& face : boreFaces) {
-//         std::vector<gp_Pnt> meshPoints;
-//         std::vector<Poly_Triangle> meshFacets;
-//         if (Part::Tools::getTriangulation(face, meshPoints, meshFacets)) {
-//             for (const auto& p : meshPoints) {
-//                 double proj = gp_Vec(threadOriginPnt, p).Dot(threadNormalAxis);
-//                 minProj = std::min(minProj, proj);
-//                 maxProj = std::max(maxProj, proj);
-//             }
-//         }
-//     }
-
-//     const double threadRadius = pcThread->Diameter.getValue() / 2.0;
-//     const double coneSemiAngleRad = pcThread->Tapered.getValue()
-//         ? Base::toRadians(pcThread->TaperedAngle.getValue() * 0.5)
-//         : 0.0;
-//     const double initialRadius = (minProj * std::tan(coneSemiAngleRad)) + threadRadius;
-
-//     bool success = false;
-
-//     for (const auto& face : boreFaces) {
-//         std::vector<gp_Pnt> meshPoints;
-//         std::vector<Poly_Triangle> meshFacets;
-//         if (!Part::Tools::getTriangulation(face, meshPoints, meshFacets)) {
-//             continue;
-//         }
-
-//         Handle(Geom_Surface) surf = unwrapSurface(face);
-//         gp_Ax3 surfPos;
-//         if (auto cyl = Handle(Geom_CylindricalSurface)::DownCast(surf)) {
-//             surfPos = cyl->Position();
-//         }
-//         else if (auto cone = Handle(Geom_ConicalSurface)::DownCast(surf)) {
-//             surfPos = cone->Position();
-//         }
-//         else {
-//             continue;
-//         }
-
-//         auto [x_dir, y_dir] = buildOrthonormalFrame(surfPos.Direction());
-//         gp_Pnt localOrigin = surfPos.Location();
-
-//         std::vector<int> localToGlobalIndex(meshPoints.size());
-//         for (size_t i = 0; i < meshPoints.size(); ++i) {
-//             localToGlobalIndex[i] = static_cast<int>(vertices.size()),
-//             uvs.push_back(addVertex(
-//                 vertices,
-//                 normals,
-//                 meshPoints[i],
-//                 localOrigin,
-//                 surfPos.Direction(),
-//                 x_dir,
-//                 y_dir,
-//                 minProj,
-//                 initialRadius,
-//                 threadPitch
-//             ));
-//         }
-//         // --- Build indices ---
-//         for (const auto& facet : meshFacets) {
-//             std::array<int, 3> n = {1, 1, 1};
-//             facet.Get(n[0], n[1], n[2]);
-//             std::array<int, 3> triIndices
-//                 = {localToGlobalIndex[n[0]], localToGlobalIndex[n[1]], localToGlobalIndex[n[2]]};
-//             handleSeamTriangle(vertices, normals, uvs, triIndices);
-
-//             indices.insert(indices.end(), {triIndices[0], triIndices[1], triIndices[2], -1});
-//         }
-//         success = true;
-//     }
-
-//     return success;
-// }
 
 bool ViewProviderThread::generateBoreMeshData(
     const PartDesign::Thread* pcThread,
@@ -1045,30 +839,6 @@ bool ViewProviderThread::generateBoreMeshData(
     return success;
 }
 
-// bool ViewProviderThread::isHoleThreadVisible() const
-// {
-//     auto* thread = getObject<PartDesign::Thread>();
-//     auto* body = PartDesign::Body::findBodyOf(thread);
-//     if (!body || !body->Visibility.getValue() || thread->Suppressed.getValue()
-//         || !thread->Threaded.getValue() || !thread->CosmeticThread.getValue()
-//         || thread->ModelThread.getValue()) {
-//         return false;
-//     }
-//     const auto& features = body->Group.getValues();
-//     auto threadIt = std::ranges::find(features, thread);
-//     if (threadIt == features.end()) {
-//         return false;
-//     }
-//     for (auto it = threadIt; it != features.end(); ++it) {
-//         auto* posteriorFeature = dynamic_cast<PartDesign::Feature*>(*it);
-//         if (posteriorFeature && posteriorFeature->Visibility.getValue()) {
-//             return true;
-//         }
-//     }
-//     // We've reached the end and no posterior feature is visible,
-//     return false;
-// }
-
 bool ViewProviderThread::isHoleThreadVisible() const
 {
     Base::Console().message("[isHoleThreadVisible]: Checking thread visibility status...\n");
@@ -1134,38 +904,6 @@ bool ViewProviderThread::isHoleThreadVisible() const
     Base::Console().message("[isHoleThreadVisible]: Reached end of features list with no visible posterior feature -> FALSE\n");
     return false;
 }
-
-// void ViewProviderThread::updateOverlay()
-// {
-//     Base::Console().message("[updateOverlay]: starting overlay\n");
-//     auto* thread = getObject<PartDesign::Thread>();
-//     bool isThreadVisible = isHoleThreadVisible();
-//     auto* bodyVp = getBodyViewProvider();
-//     if (!bodyVp) {
-//         return;
-//     }
-//     // Cleanup
-//     auto it = m_threadOverlays.find(thread);
-//     if (it != m_threadOverlays.end()) {
-//         Base::Console().message("[updateOverlay]: cleaning up\n");
-//         SoSwitch* existingSwitch = it->second;
-//         bodyVp->getRoot()->removeChild(existingSwitch);
-//         existingSwitch->unref();
-//         m_threadOverlays.erase(it);
-//     }
-//     // Add the thread
-//     if (isThreadVisible) {
-//         Base::Console().message("[updateOverlay]: adding cosmetic thread\n");
-//         if (SoSeparator* newSep = createThreadTextureSeparator()) {
-//             auto* threadSwitch = new SoSwitch();
-//             threadSwitch->ref();
-//             threadSwitch->addChild(newSep);
-//             bodyVp->getRoot()->addChild(threadSwitch);
-//             threadSwitch->whichChild = SO_SWITCH_ALL;
-//             m_threadOverlays[thread] = threadSwitch;
-//         }
-//     }
-// }
 
 void ViewProviderThread::updateOverlay()
 {

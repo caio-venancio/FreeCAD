@@ -43,7 +43,11 @@ public:
         const int threadSize,
         const int leftHanded,
         App::PropertyEnumeration& ThreadClass,
-        const bool isInternalThread
+        const bool isInternalThread,
+        const bool tapered,
+        const double taperedAngle,
+        const bool UseCustomThreadClearance,
+        const double CustomThreadClearance
     );
     App::DocumentObjectExecReturn* validateParameters(const App::PropertyLinkSub& LateralFace);
     bool isInternalFace(const App::PropertyLinkSub& faceProp, const TopoDS_Shape& solid);
@@ -90,13 +94,17 @@ public:
     std::vector<gp_Pnt> findLineCurveIntersections(const gp_Lin& line, const BRepAdaptor_Curve& curve);
     std::vector<std::string> getThreadPitches(const int threadType, const int threadDiameter) const;
     double getThreadPitch(const int threadType, const int threadDiameter, const int threadPitch) const;
+    std::vector<std::string> getThreadClasses(const int threadType, const bool isInternal) const;
     std::string getThreadDesignations(
         const int threadType,
         const int threadDiameter,
         const int threadPitch
     );
 
-    double getThroughAllLength() const;
+    double getThroughAllLength(TopoShape base) const;
+    double getThreadProfileAngle();
+    bool isThreadConical(const int threadType) const;
+    double getConicalAngle(const App::PropertyLinkSub& lateralFace);
     static const char* ThreadTypeEnums[];
     static const char* ThreadTypeNameEnums[];
     static const char* DepthTypeEnums[];
@@ -144,6 +152,7 @@ public:
         std::string name;
         std::string description;
         std::string threadType;
+        bool isConical;
         std::filesystem::path file;
         int depthType;
         std::vector<std::string> sketches;
@@ -153,6 +162,8 @@ public:
         std::vector<std::string> pitches;
         std::vector<std::string> designations;
         std::vector<std::string> tapDrills;
+        std::vector<std::string> internalClearances;
+        std::vector<std::string> externalClearances;
 
         ThreadDefinition()
             : depthType(0)

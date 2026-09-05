@@ -67,11 +67,8 @@ class PartDesignGuiExport ViewProviderThread: public ViewProviderDressUp
 
 public:
     /// constructor
-    ViewProviderThread()
-    {
-        sPixmap = "PartDesign_Thread.svg";
-        menuName = tr("Thread Parameters");
-    }
+    ViewProviderThread();
+    
      /// destructor
     // ~ViewProviderThread() override;
     // bool onDelete(const std::vector<std::string>& arg) override;
