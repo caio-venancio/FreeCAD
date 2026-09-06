@@ -80,6 +80,8 @@ using namespace PartDesignGui;
 
 PROPERTY_SOURCE(PartDesignGui::ViewProviderThread, PartDesignGui::ViewProviderDressUp)
 
+bool DEBUG = false;
+
 ViewProviderThread::ViewProviderThread()
     : textureExtension(std::make_unique<Gui::ViewProviderTextureExtension>())
 {
@@ -119,48 +121,48 @@ void ViewProviderThread::updateData(const App::Property* prop)
     
     auto* pcThread = getObject<PartDesign::Thread>();
     if(!pcThread || !prop) {
-        Base::Console().message("exit empty\n");
+        if (DEBUG) Base::Console().message("exit empty\n");
         return;
     }
     
     if (prop == &pcThread->Threaded || prop == &pcThread->CosmeticThread || prop == &pcThread->ModelThread) {
-        Base::Console().message("I'm running!!!: %s\n", prop->getName());
-        // Base::Console().message("O prop sou eu!\n");
+        if (DEBUG) Base::Console().message("I'm running!!!: %s\n", prop->getName());
+        // if (DEBUG) Base::Console().message("O prop sou eu!\n");
         if (pcThread->getParents().empty()) {
-            Base::Console().message("exit parents empty\n");
+            if (DEBUG) Base::Console().message("exit parents empty\n");
             return;
         }
         updateOverlay();
-        Base::Console().message("exit update overlay\n");
+        if (DEBUG) Base::Console().message("exit update overlay\n");
         return;
     }
     if (prop == &pcThread->ThreadDepth || prop == &pcThread->ThreadDepthType) {
         updateThreadClipper(pcThread);
-        Base::Console().message("exit thread clipper\n");
+        if (DEBUG) Base::Console().message("exit thread clipper\n");
         return;
     }
     if(prop == &pcThread->ThreadDirection) {
         updateThreadDirection(pcThread);
-        Base::Console().message("exit thread direction\n");
+        if (DEBUG) Base::Console().message("exit thread direction\n");
         return;
     }
-    // Base::Console().message("I'm ending!!!\n");
+    // if (DEBUG) Base::Console().message("I'm ending!!!\n");
 }
 
 SoSeparator* ViewProviderThread::createThreadTextureSeparator()
 {
-    Base::Console().message("[createThreadTextureSeparator]: Starting texture separator creation...\n");
+    if (DEBUG) Base::Console().message("[createThreadTextureSeparator]: Starting texture separator creation...\n");
 
     auto* pcThread = getObject<PartDesign::Thread>();
     if (!pcThread) {
-        Base::Console().warning("[createThreadTextureSeparator]: Thread object is null -> nullptr\n");
+        if (DEBUG) Base::Console().warning("[createThreadTextureSeparator]: Thread object is null -> nullptr\n");
         return nullptr;
     }
 
     gp_Pnt threadOriginPnt;
     auto threadOriginOpt = getThreadOrigin(pcThread);
     if (!threadOriginOpt.has_value()) {
-        Base::Console().warning("[createThreadTextureSeparator]: Failed to retrieve thread origin for '%s' -> nullptr\n", pcThread->getNameInDocument());
+        if (DEBUG) Base::Console().warning("[createThreadTextureSeparator]: Failed to retrieve thread origin for '%s' -> nullptr\n", pcThread->getNameInDocument());
         return nullptr;
     }
     threadOriginPnt = *threadOriginOpt;
@@ -170,17 +172,17 @@ SoSeparator* ViewProviderThread::createThreadTextureSeparator()
     std::vector<int> indices;
     std::vector<SbVec2f> uvs;
 
-    Base::Console().message("[createThreadTextureSeparator]: Generating bore mesh data for '%s'...\n", pcThread->getNameInDocument());
+    if (DEBUG) Base::Console().message("[createThreadTextureSeparator]: Generating bore mesh data for '%s'...\n", pcThread->getNameInDocument());
 
     if (!generateBoreMeshData(pcThread, threadOriginPnt, vertices, normals, indices, uvs)
         || vertices.empty() || normals.empty() || indices.empty() || uvs.empty()) {
-        Base::Console().warning("[createThreadTextureSeparator]: Mesh generation failed or produced empty data for '%s' (Verts: %zu, Norms: %zu, Inds: %zu, UVs: %zu) -> nullptr\n",
+        if (DEBUG) Base::Console().warning("[createThreadTextureSeparator]: Mesh generation failed or produced empty data for '%s' (Verts: %zu, Norms: %zu, Inds: %zu, UVs: %zu) -> nullptr\n",
                                 pcThread->getNameInDocument(),
                                 vertices.size(), normals.size(), indices.size(), uvs.size());
         return nullptr;
     }
 
-    Base::Console().message("[createThreadTextureSeparator]: Mesh data generated successfully (Verts: %zu, Inds: %zu). Assembling Coin3D nodes...\n",
+    if (DEBUG) Base::Console().message("[createThreadTextureSeparator]: Mesh data generated successfully (Verts: %zu, Inds: %zu). Assembling Coin3D nodes...\n",
                             vertices.size(), indices.size());
 
     // Create subtree
@@ -202,14 +204,14 @@ SoSeparator* ViewProviderThread::createThreadTextureSeparator()
     threadSep->addChild(m_endThreadClipper);
 
     // Material
-    Base::Console().message("[createThreadTextureSeparator]: Setting up material...\n");
+    if (DEBUG) Base::Console().message("[createThreadTextureSeparator]: Setting up material...\n");
     auto* mat = new SoMaterial();
     if (textureExtension) {
         App::Material globalMat = getGlobalMaterial();
-        Base::Console().message("[createThreadTextureSeparator]: Applying coin appearance from textureExtension...\n");
+        if (DEBUG) Base::Console().message("[createThreadTextureSeparator]: Applying coin appearance from textureExtension...\n");
         textureExtension->setCoinAppearance(mat, globalMat);
     } else {
-        Base::Console().warning("[createThreadTextureSeparator]: textureExtension pointer is NULL! Skipping appearance setup.\n");
+        if (DEBUG) Base::Console().warning("[createThreadTextureSeparator]: textureExtension pointer is NULL! Skipping appearance setup.\n");
     }
     threadSep->addChild(mat);
 
@@ -246,11 +248,11 @@ SoSeparator* ViewProviderThread::createThreadTextureSeparator()
     faces->coordIndex.setValues(0, (int)indices.size(), indices.data());
     threadSep->addChild(faces);
 
-    Base::Console().message("[createThreadTextureSeparator]: Updating clipper and phase offset...\n");
+    if (DEBUG) Base::Console().message("[createThreadTextureSeparator]: Updating clipper and phase offset...\n");
     updateThreadClipper(pcThread);
     applyThreadPhaseOffset(pcThread);
 
-    Base::Console().message("[createThreadTextureSeparator]: Successfully created thread texture separator for '%s'\n", pcThread->getNameInDocument());
+    if (DEBUG) Base::Console().message("[createThreadTextureSeparator]: Successfully created thread texture separator for '%s'\n", pcThread->getNameInDocument());
 
     return threadSep;
 }
@@ -321,41 +323,41 @@ void ViewProviderThread::applyThreadPhaseOffset(const PartDesign::Thread* pcThre
 
 void ViewProviderThread::updateThreadClipper(const PartDesign::Thread* pcThread)
 {
-    Base::Console().message("[updateThreadClipper]: Starting thread clipper update...\n");
+    if (DEBUG) Base::Console().message("[updateThreadClipper]: Starting thread clipper update...\n");
 
     if (!pcThread) {
-        Base::Console().warning("[updateThreadClipper]: Thread object is null -> Aborting\n");
+        if (DEBUG) Base::Console().warning("[updateThreadClipper]: Thread object is null -> Aborting\n");
         return;
     }
 
     if (pcThread->isRecomputing()) {
-        Base::Console().message("[updateThreadClipper]: Thread is currently recomputing -> Aborting\n");
+        if (DEBUG) Base::Console().message("[updateThreadClipper]: Thread is currently recomputing -> Aborting\n");
         return;
     }
 
     if (!m_endThreadClipper) {
-        Base::Console().warning("[updateThreadClipper]: m_endThreadClipper is null -> Aborting\n");
+        if (DEBUG) Base::Console().warning("[updateThreadClipper]: m_endThreadClipper is null -> Aborting\n");
         return;
     }
 
     std::string theadDepthType;
     try {
         theadDepthType = pcThread->ThreadDepthType.getValueAsString();
-        Base::Console().message("[updateThreadClipper]: ThreadDepthType value = '%s'\n", theadDepthType.c_str());
+        if (DEBUG) Base::Console().message("[updateThreadClipper]: ThreadDepthType value = '%s'\n", theadDepthType.c_str());
     }
     catch (const std::exception& e) {
-        Base::Console().warning("[updateThreadClipper]: Failed to read ThreadDepthType enum: %s -> Disabling clipper\n", e.what());
+        if (DEBUG) Base::Console().warning("[updateThreadClipper]: Failed to read ThreadDepthType enum: %s -> Disabling clipper\n", e.what());
         m_endThreadClipper->on = FALSE;
         return;
     }
     catch (...) {
-        Base::Console().warning("[updateThreadClipper]: Unknown exception while reading ThreadDepthType enum -> Disabling clipper\n");
+        if (DEBUG) Base::Console().warning("[updateThreadClipper]: Unknown exception while reading ThreadDepthType enum -> Disabling clipper\n");
         m_endThreadClipper->on = FALSE;
         return;
     }
 
     if (theadDepthType == "Hole depth") {
-        Base::Console().message("[updateThreadClipper]: Depth type is 'Hole depth' -> Turning clipper OFF\n");
+        if (DEBUG) Base::Console().message("[updateThreadClipper]: Depth type is 'Hole depth' -> Turning clipper OFF\n");
         m_endThreadClipper->on = FALSE;
         return;
     }
@@ -364,20 +366,20 @@ void ViewProviderThread::updateThreadClipper(const PartDesign::Thread* pcThread)
 
     auto threadNormalOpt = getThreadNormal(pcThread);
     if (!threadNormalOpt.has_value()) {
-        Base::Console().warning("[updateThreadClipper]: Failed to retrieve thread normal axis -> Aborting\n");
+        if (DEBUG) Base::Console().warning("[updateThreadClipper]: Failed to retrieve thread normal axis -> Aborting\n");
         return;
     }
     gp_Dir threadNormalAxis = *threadNormalOpt;
 
     auto threadOriginOpt = getThreadOrigin(pcThread);
     if (!threadOriginOpt.has_value()) {
-        Base::Console().warning("[updateThreadClipper]: Failed to retrieve thread origin -> Aborting\n");
+        if (DEBUG) Base::Console().warning("[updateThreadClipper]: Failed to retrieve thread origin -> Aborting\n");
         return;
     }
     gp_Pnt threadOriginPnt = *threadOriginOpt;
 
     double threadDepthValue = pcThread->ThreadDepth.getValue();
-    Base::Console().message("[updateThreadClipper]: Calculating clipping plane with depth = %.3f...\n", threadDepthValue);
+    if (DEBUG) Base::Console().message("[updateThreadClipper]: Calculating clipping plane with depth = %.3f...\n", threadDepthValue);
 
     gp_Pnt endPlanePnt = threadOriginPnt.Translated(
         gp_Vec(threadNormalAxis) * -threadDepthValue
@@ -388,7 +390,7 @@ void ViewProviderThread::updateThreadClipper(const PartDesign::Thread* pcThread)
 
     // Update the end thread clipper plane
     m_endThreadClipper->plane.setValue(SbPlane(endPlaneNormal, endPlanePoint));
-    Base::Console().message("[updateThreadClipper]: Clipper plane updated successfully (OFF at depth limit)\n");
+    if (DEBUG) Base::Console().message("[updateThreadClipper]: Clipper plane updated successfully (OFF at depth limit)\n");
 }
 
 std::optional<gp_Dir> ViewProviderThread::getThreadNormal(const PartDesign::Thread* pcThread) const
@@ -411,30 +413,30 @@ std::vector<gp_Pnt> ViewProviderThread::getThreadLocations(const PartDesign::Thr
 
 std::vector<TopoDS_Face> ViewProviderThread::collectBoreFaces(const PartDesign::Thread* pcThread) const
 {
-    Base::Console().message("[collectBoreFaces]: Starting bore faces collection...\n");
+    if (DEBUG) Base::Console().message("[collectBoreFaces]: Starting bore faces collection...\n");
 
     std::vector<TopoDS_Face> boreFaces;
     if (!pcThread) {
-        Base::Console().warning("[collectBoreFaces]: Thread object is null -> Empty list\n");
+        if (DEBUG) Base::Console().warning("[collectBoreFaces]: Thread object is null -> Empty list\n");
         return boreFaces;
     }
 
     TopoDS_Shape bodyShape = getCurrentlyVisibleShape(pcThread);
     if (bodyShape.IsNull()) {
-        Base::Console().warning("[collectBoreFaces]: Visible body shape is null for thread '%s' -> Empty list\n", pcThread->getNameInDocument());
+        if (DEBUG) Base::Console().warning("[collectBoreFaces]: Visible body shape is null for thread '%s' -> Empty list\n", pcThread->getNameInDocument());
         return boreFaces;
     }
 
     auto threadNormalOpt = getThreadNormal(pcThread);
     if (!threadNormalOpt.has_value()) {
-        Base::Console().warning("[collectBoreFaces]: Failed to get thread normal axis -> Empty list\n");
+        if (DEBUG) Base::Console().warning("[collectBoreFaces]: Failed to get thread normal axis -> Empty list\n");
         return boreFaces;
     }
     gp_Dir threadAxis = *threadNormalOpt;
 
     std::vector<gp_Pnt> validLocations = getThreadLocations(pcThread);
     if (validLocations.empty()) {
-        Base::Console().warning("[collectBoreFaces]: No valid locations found for thread '%s' -> Empty list\n", pcThread->getNameInDocument());
+        if (DEBUG) Base::Console().warning("[collectBoreFaces]: No valid locations found for thread '%s' -> Empty list\n", pcThread->getNameInDocument());
         return boreFaces;
     }
 
@@ -445,7 +447,7 @@ std::vector<TopoDS_Face> ViewProviderThread::collectBoreFaces(const PartDesign::
         ? Base::toRadians(90 - pcThread->TaperedAngle.getValue())
         : 0.0;
 
-    Base::Console().message("[collectBoreFaces]: Filtering faces for '%s' (isTapered=%s, targetRadius=%.3f, locationsCount=%zu)...\n",
+    if (DEBUG) Base::Console().message("[collectBoreFaces]: Filtering faces for '%s' (isTapered=%s, targetRadius=%.3f, locationsCount=%zu)...\n",
                             pcThread->getNameInDocument(),
                             isTapered ? "TRUE" : "FALSE",
                             holeRadius,
@@ -520,11 +522,11 @@ std::vector<TopoDS_Face> ViewProviderThread::collectBoreFaces(const PartDesign::
     }
 
     if (boreFaces.empty()) {
-        Base::Console().warning("[collectBoreFaces]: Examined %zu faces but found NO matching bore faces! "
+        if (DEBUG) Base::Console().warning("[collectBoreFaces]: Examined %zu faces but found NO matching bore faces! "
                                 "(Rejected: Type=%zu, Radius/Angle=%zu, Location=%zu, Parallelism=%zu)\n",
                                 totalFacesExamined, rejectedType, rejectedGeomProps, rejectedLocation, rejectedParallelism);
     } else {
-        Base::Console().message("[collectBoreFaces]: Successfully collected %zu bore faces out of %zu examined faces\n",
+        if (DEBUG) Base::Console().message("[collectBoreFaces]: Successfully collected %zu bore faces out of %zu examined faces\n",
                                 boreFaces.size(), totalFacesExamined);
     }
 
@@ -533,32 +535,32 @@ std::vector<TopoDS_Face> ViewProviderThread::collectBoreFaces(const PartDesign::
 
 App::Material ViewProviderThread::getGlobalMaterial()
 {
-    Base::Console().message("[getGlobalMaterial]: Fetching global material...\n");
+    if (DEBUG) Base::Console().message("[getGlobalMaterial]: Fetching global material...\n");
 
     if (auto* materialProp = dynamic_cast<App::PropertyMaterial*>(getPropertyByName("Material"))) {
-        Base::Console().message("[getGlobalMaterial]: Found material directly on Thread ViewProvider\n");
+        if (DEBUG) Base::Console().message("[getGlobalMaterial]: Found material directly on Thread ViewProvider\n");
         return materialProp->getValue();
     }
     else {
-        Base::Console().message("[getGlobalMaterial]: Material property not found on Thread ViewProvider\n");
+        if (DEBUG) Base::Console().message("[getGlobalMaterial]: Material property not found on Thread ViewProvider\n");
     }
 
     if (auto* bodyVp = getBodyViewProvider()) {
-        Base::Console().message("[getGlobalMaterial]: Found parent Body ViewProvider, checking material...\n");
+        if (DEBUG) Base::Console().message("[getGlobalMaterial]: Found parent Body ViewProvider, checking material...\n");
         if (auto* materialProp
             = freecad_cast<App::PropertyMaterial*>(bodyVp->getPropertyByName("Material"))) {
-            Base::Console().message("[getGlobalMaterial]: Found material on parent Body ViewProvider\n");
+            if (DEBUG) Base::Console().message("[getGlobalMaterial]: Found material on parent Body ViewProvider\n");
             return materialProp->getValue();
         }
         else {
-            Base::Console().message("[getGlobalMaterial]: Material property not found on parent Body ViewProvider\n");
+            if (DEBUG) Base::Console().message("[getGlobalMaterial]: Material property not found on parent Body ViewProvider\n");
         }
     }
     else {
-        Base::Console().warning("[getGlobalMaterial]: Body ViewProvider is NULL!\n");
+        if (DEBUG) Base::Console().warning("[getGlobalMaterial]: Body ViewProvider is NULL!\n");
     }
 
-    Base::Console().message("[getGlobalMaterial]: Falling back to App::Material::getDefaultAppearance()\n");
+    if (DEBUG) Base::Console().message("[getGlobalMaterial]: Falling back to App::Material::getDefaultAppearance()\n");
     return App::Material::getDefaultAppearance();
 }
 
@@ -705,11 +707,11 @@ bool ViewProviderThread::generateBoreMeshData(
     std::vector<SbVec2f>& uvs
 )
 {
-    Base::Console().message("[generateBoreMeshData]: Starting mesh generation...\n");
+    if (DEBUG) Base::Console().message("[generateBoreMeshData]: Starting mesh generation...\n");
 
     const double threadPitch = pcThread->getThreadPitch();
     if (threadPitch == 0.0) {
-        Base::Console().warning("[generateBoreMeshData]: Thread pitch is 0.0 -> FALSE\n");
+        if (DEBUG) Base::Console().warning("[generateBoreMeshData]: Thread pitch is 0.0 -> FALSE\n");
         return false;
     }
 
@@ -720,15 +722,15 @@ bool ViewProviderThread::generateBoreMeshData(
 
     const auto& boreFaces = collectBoreFaces(pcThread);
     if (boreFaces.empty()) {
-        Base::Console().warning("[generateBoreMeshData]: No bore faces collected for thread '%s' -> FALSE\n", pcThread->getNameInDocument());
+        if (DEBUG) Base::Console().warning("[generateBoreMeshData]: No bore faces collected for thread '%s' -> FALSE\n", pcThread->getNameInDocument());
         return false;
     }
 
-    Base::Console().message("[generateBoreMeshData]: Collected %zu bore faces\n", boreFaces.size());
+    if (DEBUG) Base::Console().message("[generateBoreMeshData]: Collected %zu bore faces\n", boreFaces.size());
 
     auto threadNormalOpt = getThreadNormal(pcThread);
     if (!threadNormalOpt.has_value()) {
-        Base::Console().warning("[generateBoreMeshData]: Failed to get thread normal axis -> FALSE\n");
+        if (DEBUG) Base::Console().warning("[generateBoreMeshData]: Failed to get thread normal axis -> FALSE\n");
         return false;
     }
     gp_Dir threadNormalAxis = *threadNormalOpt;
@@ -749,16 +751,16 @@ bool ViewProviderThread::generateBoreMeshData(
                 maxProj = std::max(maxProj, proj);
             }
         } else {
-            Base::Console().warning("[generateBoreMeshData]: Triangulation failed for bore face index %zu\n", i);
+            if (DEBUG) Base::Console().warning("[generateBoreMeshData]: Triangulation failed for bore face index %zu\n", i);
         }
     }
 
     if (totalTriangulatedPoints == 0) {
-        Base::Console().warning("[generateBoreMeshData]: All face triangulations produced 0 points -> FALSE\n");
+        if (DEBUG) Base::Console().warning("[generateBoreMeshData]: All face triangulations produced 0 points -> FALSE\n");
         return false;
     }
 
-    Base::Console().message("[generateBoreMeshData]: Projection bounds computed (minProj: %.3f, maxProj: %.3f, totalPoints: %zu)\n", 
+    if (DEBUG) Base::Console().message("[generateBoreMeshData]: Projection bounds computed (minProj: %.3f, maxProj: %.3f, totalPoints: %zu)\n", 
                             minProj, maxProj, totalTriangulatedPoints);
 
     const double threadRadius = pcThread->Diameter.getValue() / 2.0;
@@ -775,7 +777,7 @@ bool ViewProviderThread::generateBoreMeshData(
         std::vector<gp_Pnt> meshPoints;
         std::vector<Poly_Triangle> meshFacets;
         if (!Part::Tools::getTriangulation(face, meshPoints, meshFacets)) {
-            Base::Console().warning("[generateBoreMeshData]: Face index %zu skipped (triangulation failed)\n", i);
+            if (DEBUG) Base::Console().warning("[generateBoreMeshData]: Face index %zu skipped (triangulation failed)\n", i);
             skippedFacesCount++;
             continue;
         }
@@ -789,7 +791,7 @@ bool ViewProviderThread::generateBoreMeshData(
             surfPos = cone->Position();
         }
         else {
-            Base::Console().warning("[generateBoreMeshData]: Face index %zu skipped (Surface is neither Cylindrical nor Conical)\n", i);
+            if (DEBUG) Base::Console().warning("[generateBoreMeshData]: Face index %zu skipped (Surface is neither Cylindrical nor Conical)\n", i);
             skippedFacesCount++;
             continue;
         }
@@ -829,10 +831,10 @@ bool ViewProviderThread::generateBoreMeshData(
     }
 
     if (!success) {
-        Base::Console().warning("[generateBoreMeshData]: Failed to process any bore faces (Skipped %zu/%zu faces) -> FALSE\n", 
+        if (DEBUG) Base::Console().warning("[generateBoreMeshData]: Failed to process any bore faces (Skipped %zu/%zu faces) -> FALSE\n", 
                                 skippedFacesCount, boreFaces.size());
     } else {
-        Base::Console().message("[generateBoreMeshData]: Mesh generated successfully (Verts: %zu, Norms: %zu, Inds: %zu, UVs: %zu)\n",
+        if (DEBUG) Base::Console().message("[generateBoreMeshData]: Mesh generated successfully (Verts: %zu, Norms: %zu, Inds: %zu, UVs: %zu)\n",
                                 vertices.size(), normals.size(), indices.size(), uvs.size());
     }
 
@@ -841,17 +843,17 @@ bool ViewProviderThread::generateBoreMeshData(
 
 bool ViewProviderThread::isHoleThreadVisible() const
 {
-    Base::Console().message("[isHoleThreadVisible]: Checking thread visibility status...\n");
+    if (DEBUG) Base::Console().message("[isHoleThreadVisible]: Checking thread visibility status...\n");
 
     auto* thread = getObject<PartDesign::Thread>();
     if (!thread) {
-        Base::Console().warning("[isHoleThreadVisible]: Thread object is null -> FALSE\n");
+        if (DEBUG) Base::Console().warning("[isHoleThreadVisible]: Thread object is null -> FALSE\n");
         return false;
     }
 
     auto* body = PartDesign::Body::findBodyOf(thread);
     if (!body) {
-        Base::Console().warning("[isHoleThreadVisible]: Parent Body not found for thread '%s' -> FALSE\n", thread->getNameInDocument());
+        if (DEBUG) Base::Console().warning("[isHoleThreadVisible]: Parent Body not found for thread '%s' -> FALSE\n", thread->getNameInDocument());
         return false;
     }
 
@@ -862,7 +864,7 @@ bool ViewProviderThread::isHoleThreadVisible() const
     bool isCosmetic = thread->CosmeticThread.getValue();
     bool isModel = thread->ModelThread.getValue();
 
-    Base::Console().message("[isHoleThreadVisible]: Conditions for '%s': BodyVis=%s, Suppressed=%s, Threaded=%s, Cosmetic=%s, Model=%s\n",
+    if (DEBUG) Base::Console().message("[isHoleThreadVisible]: Conditions for '%s': BodyVis=%s, Suppressed=%s, Threaded=%s, Cosmetic=%s, Model=%s\n",
                             thread->getNameInDocument(),
                             isBodyVisible ? "TRUE" : "FALSE",
                             isSuppressed ? "TRUE" : "FALSE",
@@ -871,7 +873,7 @@ bool ViewProviderThread::isHoleThreadVisible() const
                             isModel ? "TRUE" : "FALSE");
 
     if (!isBodyVisible || isSuppressed || !isThreaded || !isCosmetic || isModel) {
-        Base::Console().message("[isHoleThreadVisible]: Initial condition check failed -> FALSE\n");
+        if (DEBUG) Base::Console().message("[isHoleThreadVisible]: Initial condition check failed -> FALSE\n");
         return false;
     }
 
@@ -879,78 +881,78 @@ bool ViewProviderThread::isHoleThreadVisible() const
     const auto& features = body->Group.getValues();
     auto threadIt = std::ranges::find(features, thread);
     if (threadIt == features.end()) {
-        Base::Console().warning("[isHoleThreadVisible]: Thread '%s' not found inside parent Body group -> FALSE\n", thread->getNameInDocument());
+        if (DEBUG) Base::Console().warning("[isHoleThreadVisible]: Thread '%s' not found inside parent Body group -> FALSE\n", thread->getNameInDocument());
         return false;
     }
 
-    Base::Console().message("[isHoleThreadVisible]: Checking posterior features visibility starting from thread '%s'...\n", thread->getNameInDocument());
+    if (DEBUG) Base::Console().message("[isHoleThreadVisible]: Checking posterior features visibility starting from thread '%s'...\n", thread->getNameInDocument());
 
     for (auto it = threadIt; it != features.end(); ++it) {
         auto* posteriorFeature = dynamic_cast<PartDesign::Feature*>(*it);
         if (posteriorFeature) {
             bool featureVis = posteriorFeature->Visibility.getValue();
-            Base::Console().message("[isHoleThreadVisible]: Feature '%s' visibility = %s\n",
+            if (DEBUG) Base::Console().message("[isHoleThreadVisible]: Feature '%s' visibility = %s\n",
                                     posteriorFeature->getNameInDocument(),
                                     featureVis ? "TRUE" : "FALSE");
 
             if (featureVis) {
-                Base::Console().message("[isHoleThreadVisible]: Visible posterior feature found ('%s') -> TRUE\n", posteriorFeature->getNameInDocument());
+                if (DEBUG) Base::Console().message("[isHoleThreadVisible]: Visible posterior feature found ('%s') -> TRUE\n", posteriorFeature->getNameInDocument());
                 return true;
             }
         }
     }
 
     // Chegou ao fim e nenhuma feature posterior está visível
-    Base::Console().message("[isHoleThreadVisible]: Reached end of features list with no visible posterior feature -> FALSE\n");
+    if (DEBUG) Base::Console().message("[isHoleThreadVisible]: Reached end of features list with no visible posterior feature -> FALSE\n");
     return false;
 }
 
 void ViewProviderThread::updateOverlay()
 {
-    Base::Console().message("[updateOverlay]: Starting overlay update\n");
+    if (DEBUG) Base::Console().message("[updateOverlay]: Starting overlay update\n");
 
     auto* thread = getObject<PartDesign::Thread>();
     if (!thread) {
-        Base::Console().warning("[updateOverlay]: Thread object is null, aborting\n");
+        if (DEBUG) Base::Console().warning("[updateOverlay]: Thread object is null, aborting\n");
         return;
     }
 
-    Base::Console().message("[updateOverlay]: Processing thread object '%s'\n", thread->getNameInDocument());
+    if (DEBUG) Base::Console().message("[updateOverlay]: Processing thread object '%s'\n", thread->getNameInDocument());
 
     bool isThreadVisible = isHoleThreadVisible();
-    Base::Console().message("[updateOverlay]: Thread visibility status = %s\n", isThreadVisible ? "TRUE" : "FALSE");
+    if (DEBUG) Base::Console().message("[updateOverlay]: Thread visibility status = %s\n", isThreadVisible ? "TRUE" : "FALSE");
 
     auto* bodyVp = getBodyViewProvider();
     if (!bodyVp) {
-        Base::Console().warning("[updateOverlay]: Body view provider is null, aborting\n");
+        if (DEBUG) Base::Console().warning("[updateOverlay]: Body view provider is null, aborting\n");
         return;
     }
 
     // --- Cleanup ---
     auto it = m_threadOverlays.find(thread);
     if (it != m_threadOverlays.end()) {
-        Base::Console().message("[updateOverlay]: Cleaning up existing overlay for thread '%s'\n", thread->getNameInDocument());
+        if (DEBUG) Base::Console().message("[updateOverlay]: Cleaning up existing overlay for thread '%s'\n", thread->getNameInDocument());
         SoSwitch* existingSwitch = it->second;
         
         if (bodyVp->getRoot()) {
             bodyVp->getRoot()->removeChild(existingSwitch);
-            Base::Console().message("[updateOverlay]: Existing SoSwitch removed from scene graph root\n");
+            if (DEBUG) Base::Console().message("[updateOverlay]: Existing SoSwitch removed from scene graph root\n");
         } else {
-            Base::Console().warning("[updateOverlay]: Scene graph root was null during cleanup\n");
+            if (DEBUG) Base::Console().warning("[updateOverlay]: Scene graph root was null during cleanup\n");
         }
 
         existingSwitch->unref();
         m_threadOverlays.erase(it);
-        Base::Console().message("[updateOverlay]: Cleanup complete and entry erased from map\n");
+        if (DEBUG) Base::Console().message("[updateOverlay]: Cleanup complete and entry erased from map\n");
     } else {
-        Base::Console().message("[updateOverlay]: No existing overlay found in map to clean up\n");
+        if (DEBUG) Base::Console().message("[updateOverlay]: No existing overlay found in map to clean up\n");
     }
 
     // --- Add the cosmetic thread overlay ---
     if (isThreadVisible) {
-        Base::Console().message("[updateOverlay]: Generating new cosmetic thread texture separator... HEHE\n");
+        if (DEBUG) Base::Console().message("[updateOverlay]: Generating new cosmetic thread texture separator... HEHE\n");
         if (SoSeparator* newSep = createThreadTextureSeparator()) {
-            Base::Console().message("[updateOverlay]: Texture separator created successfully (ptr:)\n");
+            if (DEBUG) Base::Console().message("[updateOverlay]: Texture separator created successfully (ptr:)\n");
             
             auto* threadSwitch = new SoSwitch();
             threadSwitch->ref();
@@ -960,17 +962,17 @@ void ViewProviderThread::updateOverlay()
                 bodyVp->getRoot()->addChild(threadSwitch);
                 threadSwitch->whichChild = SO_SWITCH_ALL;
                 m_threadOverlays[thread] = threadSwitch;
-                Base::Console().message("[updateOverlay]: New cosmetic thread successfully attached to scene graph (SoSwitch ptr:)\n");
+                if (DEBUG) Base::Console().message("[updateOverlay]: New cosmetic thread successfully attached to scene graph (SoSwitch ptr:)\n");
             } else {
-                Base::Console().error("[updateOverlay]: Failed to attach SoSwitch — scene graph root is null\n");
+                if (DEBUG) Base::Console().error("[updateOverlay]: Failed to attach SoSwitch — scene graph root is null\n");
                 threadSwitch->unref();
             }
         } else {
-            Base::Console().warning("[updateOverlay]: Failed to create texture separator (createThreadTextureSeparator returned null)\n");
+            if (DEBUG) Base::Console().warning("[updateOverlay]: Failed to create texture separator (createThreadTextureSeparator returned null)\n");
         }
     } else {
-        Base::Console().message("[updateOverlay]: Overlay skipped because thread is not visible\n");
+        if (DEBUG) Base::Console().message("[updateOverlay]: Overlay skipped because thread is not visible\n");
     }
 
-    Base::Console().message("[updateOverlay]: Overlay update finished\n");
+    if (DEBUG) Base::Console().message("[updateOverlay]: Overlay update finished\n");
 }

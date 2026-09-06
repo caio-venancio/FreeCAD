@@ -102,6 +102,26 @@ public:
     );
 
     double getThroughAllLength(TopoShape base) const;
+    double getUpToGeometryLength(const App::PropertyLinkSub& upToGeometry, const App::PropertyLinkSub& lateralFace, const App::PropertyLinkSub& startPlane);
+    double getUpToFirstLength(
+        const App::PropertyLinkSub& lateralFace,
+        const App::PropertyLinkSub& startFace,
+        Part::TopoShape base,
+        const int threadType,
+        const int threadSize,
+        const bool isInternalThread,
+        const bool UseCustomThreadClearance,
+        const double CustomThreadClearance,
+        App::PropertyEnumeration& ThreadClass,
+        const bool tapered,
+        const double taperedAngle
+    );
+    gp_Pnt getThreadEndPoint(
+        const App::PropertyLinkSub& lateralFace,
+        const App::PropertyLinkSub& upToGeometry,
+        const gp_Pnt& startPoint
+    );
+    gp_Pnt getThreadFarPoint(const App::PropertyLinkSub& lateralFace, const gp_Dir& zDir) const;
     double getThreadProfileAngle();
     bool isThreadConical(const int threadType) const;
     double getConicalAngle(const App::PropertyLinkSub& lateralFace);

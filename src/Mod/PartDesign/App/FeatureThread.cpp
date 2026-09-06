@@ -173,14 +173,25 @@ App::DocumentObjectExecReturn* Thread::execute()
             length = Depth.getValue();
         }
         else if (method == "UpToFirst") {
-            /* TODO */
+                length = threadUtils.getUpToFirstLength(
+                    LateralFace,
+                    StartPlane,
+                    base,
+                    ThreadType.getValue(),
+                    ThreadSize.getValue(),
+                    IsInternal.getValue(),
+                    UseCustomThreadClearance.getValue(),
+                    CustomThreadClearance.getValue(),
+                    ThreadClass,
+                    Tapered.getValue(),
+                    TaperedAngle.getValue()
+                );
         }
         else if (method == "ThroughAll") {
             length = threadUtils.getThroughAllLength(base);
         }
         else if (method == "UpToGeometry") {
-            /* TODO */
-            length = 10;
+            length = threadUtils.getUpToGeometryLength(UpToGeometry, LateralFace, StartPlane);
         }
         else {
             return new App::DocumentObjectExecReturn(

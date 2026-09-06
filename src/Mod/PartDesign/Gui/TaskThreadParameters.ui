@@ -113,6 +113,11 @@
                     <string>Up to geometry</string>
                 </property>
             </item>
+            <item>
+                <property name="text">
+                    <string>Up to first</string>
+                </property>
+            </item>
         </widget>
       </item>
       <item row="3" column="0">
