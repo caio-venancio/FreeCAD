@@ -1765,7 +1765,7 @@ void ThreadUtils::ThreadLibrary::findSpreadsheets(App::Document* doc, ThreadDefi
 
     App::DocumentObject* obj = doc->getObject("Spreadsheet");
 
-    static const std::map<std::string, std::vector<std::string>*> columnTargets = {
+    const std::map<std::string, std::vector<std::string>*> columnTargets = {
         {"designation",    &designations},
         {"size",           &sizes},
         {"minordiameter",  &minorDiameters},
