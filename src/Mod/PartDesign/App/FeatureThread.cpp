@@ -22,9 +22,18 @@
  *                                                                          *
  ***************************************************************************/
 
+#include <BRepPrimAPI_MakeSphere.hxx>
+
 #include "FeatureThread.h"
 #include "FeatureDressUp.h"
 #include "ThreadUtils.h"
+
+#include <GProp_GProps.hxx>
+#include <BRepGProp.hxx>
+#include <Bnd_Box.hxx>
+#include <BRepBndLib.hxx>
+#include <TopExp_Explorer.hxx>
+#include <iomanip>
 
 #include <Mod/Part/App/TopoShapeOpCode.h>
 
@@ -141,6 +150,36 @@ App::DocumentObjectExecReturn* Thread::execute()
     double diameter = threadUtils.getLateralFaceDiameter(LateralFace);
     Diameter.setValue(diameter);
 
+    int nearestSize = -1;
+    if (!IsInternal.getValue()) {
+        nearestSize = threadUtils.findNearestThreadSize(ThreadType.getValue(), diameter);
+    }
+    else {
+        nearestSize = threadUtils.findNearestMinorThreadSize(ThreadType.getValue(), diameter);
+    }
+
+    if (nearestSize < 0) {
+        return new App::DocumentObjectExecReturn(
+            QT_TRANSLATE_NOOP("Exception", "Thread error: No thread definition found for the selected type.")
+        );
+    }
+
+    std::vector<std::string> diameters = threadUtils.getThreadDiameters(ThreadType.getValue());
+    if (nearestSize >= static_cast<int>(diameters.size())) {
+        return new App::DocumentObjectExecReturn(
+            QT_TRANSLATE_NOOP("Exception", "Thread error: Thread size index out of definition range.")
+        );
+    }
+    double definedDiameter = std::stod(diameters[nearestSize]);
+
+    if (std::abs(diameter - definedDiameter) > Precision::Confusion()) {
+        Base::Console().message("diameter: %lf\n", diameter);
+        Base::Console().message("definedDiameter: %lf\n", definedDiameter);
+        std::string msg = "Thread error: No thread definition found with exact diameter matching " 
+                        + std::to_string(diameter) + " mm.";
+        return new App::DocumentObjectExecReturn(msg.c_str());
+    }
+
     double conicalAngle = threadUtils.getConicalAngle(LateralFace);
     Base::Console().message("Conical Angle: %lf\n", conicalAngle);
     // double nearestSize = 0.0;
@@ -160,12 +199,22 @@ App::DocumentObjectExecReturn* Thread::execute()
     // Base::Console().message("diameter: %lf\n", diameter);
 
     try {
-        gp_Vec emptyXDir;
-        gp_Vec emptyZDir;
-        double testLength = 10.0;
-
         gp_Vec zDir = threadUtils.getThreadZAxis(LateralFace);
         gp_Vec xDir = threadUtils.computePerpendicular(zDir);
+
+        gp_Dir axisDir(zDir);
+        gp_Pnt nearPoint = threadUtils.getThreadStartPoint(LateralFace, axisDir);
+        gp_Pnt farPoint  = threadUtils.getThreadFarPoint(LateralFace, axisDir);
+        double cylinderHeight = nearPoint.Distance(farPoint);
+
+        double projStart = gp_Vec(nearPoint, startPoint).Dot(gp_Vec(axisDir));
+
+        if (projStart < -Precision::Confusion()) {
+            return new App::DocumentObjectExecReturn(
+                QT_TRANSLATE_NOOP("Exception", "Thread error: Start point is above the top of the cylinder face")
+            );
+        }
+
         std::string method(DepthType.getValueAsString());
         double length = 0.0;
 
@@ -188,9 +237,11 @@ App::DocumentObjectExecReturn* Thread::execute()
                 );
         }
         else if (method == "ThroughAll") {
-            length = threadUtils.getThroughAllLength(base);
+            // length = threadUtils.getThroughAllLength(base);
+            length = cylinderHeight;
         }
         else if (method == "UpToGeometry") {
+            //TODO: limit UpToGeometry to not be upper than startplane
             length = threadUtils.getUpToGeometryLength(UpToGeometry, LateralFace, StartPlane);
         }
         else {
@@ -202,6 +253,15 @@ App::DocumentObjectExecReturn* Thread::execute()
         if (length <= 0.0) {
             return new App::DocumentObjectExecReturn(
                 QT_TRANSLATE_NOOP("Exception", "Thread error: Invalid Thread depth")
+            );
+        }
+        
+        Base::Console().message("cylinderHeight: %lf\n", cylinderHeight);
+        Base::Console().message("length: %lf\n", length);
+
+        if (length > cylinderHeight) {
+            return new App::DocumentObjectExecReturn(
+                QT_TRANSLATE_NOOP("Exception", "Thread error: Thread depth greater than cylinder height")
             );
         }
 
@@ -229,15 +289,17 @@ App::DocumentObjectExecReturn* Thread::execute()
             base = reducedBase;
         }
 
+        // this->Shape.setValue(base);
+        // return App::DocumentObject::StdReturn;
+
         // if (Threaded.getValue() && ModelThread.getValue()) {
         if (ModelThread.getValue()) {
             // gp_Vec zDirFixed = zDir.Reversed(); 
 
-            std::cout << "before makeThread\n";
             TopoDS_Shape thread = threadUtils.makeThread(
                     xDir, 
                     zDir, 
-                    length, 
+                    length-threadUtils.getThreadPitch(ThreadType.getValue(), ThreadSize.getValue(), ThreadPitch.getValue()), 
                     ThreadType.getValue(),
                     ThreadSize.getValue(),
                     ThreadDirection.getValue(),
@@ -248,12 +310,20 @@ App::DocumentObjectExecReturn* Thread::execute()
                     UseCustomThreadClearance.getValue(),
                     CustomThreadClearance.getValue()
             );
-            std::cout << "after makeThread\n";
 
             // if(IsInternal.getValue()){
                 gp_Vec zDirUnit = zDir;
                 zDirUnit.Normalize();
-                gp_Pnt bottomPoint = startPoint.Translated(zDirUnit * length);
+                gp_Pnt bottomPoint = startPoint.Translated(zDirUnit * (length-threadUtils.getThreadPitch(ThreadType.getValue(), ThreadSize.getValue(), ThreadPitch.getValue())));
+
+                double projBottom = gp_Vec(nearPoint, bottomPoint).Dot(gp_Vec(axisDir));
+
+                if (projBottom > cylinderHeight -threadUtils.getThreadPitch(ThreadType.getValue(), ThreadSize.getValue(), ThreadPitch.getValue()) + Precision::Confusion()) {
+                    return new App::DocumentObjectExecReturn(
+                        QT_TRANSLATE_NOOP("Exception", "Thread error: Thread bottom point is below the base of the cylinder face")
+                    );
+                }
+                
                 // gp_Pnt axisOrigin = threadUtils.getThreadAxisOrigin(LateralFace); // It's going to be used in getthreadstart
                 Base::Console().message("bottomPoint = (%f, %f, %f)\n",
                                 bottomPoint.X(), bottomPoint.Y(), bottomPoint.Z());
@@ -309,6 +379,7 @@ App::DocumentObjectExecReturn* Thread::execute()
             }
 
             this->Shape.setValue(result);
+
         } else {
             this->positionByBaseFeature();
             this->Shape.setValue(base);

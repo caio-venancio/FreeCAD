@@ -222,6 +222,7 @@ public:
     double getLateralFaceDiameter(const App::PropertyLinkSub& lateralFace);
     int findNearestThreadSize(const int threadType, const double size);
     int findNearestMinorThreadSize(const int threadType, const double diameter);
+    double estimateMinorDiameterFromProfile(const std::string& threadTypeStr, double majorDiameter, double pitch);
 
 private:
     double getThreadClassClearance(

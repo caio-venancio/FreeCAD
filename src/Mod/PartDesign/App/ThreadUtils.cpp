@@ -66,7 +66,7 @@
 
 using namespace PartDesign;
 
-bool DEBUG = false;
+bool DEBUG = true;
 
 /* "None" profile */
 const char* ThreadUtils::ThreadClass_None_Enums[] = {"None", nullptr};
@@ -565,27 +565,91 @@ std::vector<std::string> ThreadUtils::getThreadMinorDiameters(const int threadTy
     return designations;
 }
 
+double ThreadUtils::estimateMinorDiameterFromProfile(
+    const std::string& threadTypeStr,
+    double majorDiameter,
+    double pitch)
+{
+    double Rmaj = majorDiameter / 2.0;
+    double rootRadius;
+
+    if (threadTypeStr == "BSP" || threadTypeStr == "BSW" || threadTypeStr == "BSF") {
+        double H = 0.960491 * pitch;
+        rootRadius = Rmaj - (5.0 * H / 6.0);
+    }
+    else {
+        double H = std::sqrt(3.0) / 2.0 * pitch;
+        double h = 7.0 * H / 8.0;
+        rootRadius = Rmaj - h;
+    }
+
+    if (rootRadius < 0.0) {
+        rootRadius = 0.0;
+    }
+
+    return 2.0 * rootRadius;
+}
+
 // TODO: return with threadclass in account
-double ThreadUtils::getMinorDiameter(const int threadType, const int size)  // const int threadclass)
+// double ThreadUtils::getMinorDiameter(const int threadType, const int size)  // const int threadclass)
+// {
+//     std::vector<std::string> currentThreads = ThreadUtils::getThreadTypeNameEnums();
+//     std::string currentThread = currentThreads[threadType];
+//     int currentThreadTypeIndex = threadTypeFromString(currentThread);
+
+//     std::vector<std::string> minorDiameters;
+//     const auto& definitions = getThreadDefinitions();
+//     for (const auto& definition : definitions) {
+//         if (definition.name == currentThread) {
+//             minorDiameters = definition.minorDiameters;
+//             break;
+//         }
+//     }
+//     if (minorDiameters.empty()) {
+//         return 0.0;
+//     }
+
+//     // TODO: protect this against invalid access
+//     return std::abs(std::stod(minorDiameters[size]));
+// }
+
+double ThreadUtils::getMinorDiameter(const int threadType, const int size)
 {
     std::vector<std::string> currentThreads = ThreadUtils::getThreadTypeNameEnums();
     std::string currentThread = currentThreads[threadType];
     int currentThreadTypeIndex = threadTypeFromString(currentThread);
 
-    std::vector<std::string> minorDiameters;
+    std::vector<std::string> minorDiameters, sizes, pitches;
     const auto& definitions = getThreadDefinitions();
     for (const auto& definition : definitions) {
         if (definition.name == currentThread) {
             minorDiameters = definition.minorDiameters;
+            sizes = definition.sizes;
+            pitches = definition.pitches;
             break;
         }
     }
-    if (minorDiameters.empty()) {
-        return 0.0;
+
+    bool hasValue = static_cast<size_t>(size) < minorDiameters.size()
+        && !minorDiameters[size].empty();
+
+    if (hasValue) {
+        double value = std::abs(std::stod(minorDiameters[size]));
+        if (value > Precision::Confusion()) {
+            return value;
+        }
     }
 
-    // TODO: protect this against invalid access
-    return std::abs(std::stod(minorDiameters[size]));
+    if (static_cast<size_t>(size) < sizes.size()
+        && static_cast<size_t>(size) < pitches.size()) {
+        double majorDiameter = std::stod(sizes[size]);
+        double pitch = std::stod(pitches[size]);
+        std::string threadTypeStr = ThreadTypeEnums[currentThreadTypeIndex];
+        //TODO: fix boolean operation so that 0.01 is not needed
+        return estimateMinorDiameterFromProfile(threadTypeStr, majorDiameter, pitch) + 0.01;
+    }
+
+    return 0.0;
 }
 
 std::vector<std::string> ThreadUtils::getThreadPitches(const int threadType, const int threadDiameter) const
@@ -992,11 +1056,34 @@ TopoDS_Shape ThreadUtils::makeThread(
         //       | base-sharpV    Rmaj
 
         // the little adjustment of p1 and p4 is here to prevent coincidencies
+        double temp = RmajC;
+        RmajC = RmajC; //+ 0.6325;
         double marginX = std::tan(Base::toRadians(60.0)) * marginZ;
         gp_Pnt p1 = toPnt((RmajC - h + marginX) * xDir + marginZ * zDir);
         gp_Pnt p2 = toPnt((RmajC)*xDir + 7 * Pitch / 16 * zDir);
         gp_Pnt p3 = toPnt((RmajC)*xDir + 9 * Pitch / 16 * zDir);
         gp_Pnt p4 = toPnt((RmajC - h + marginX) * xDir + (Pitch - marginZ) * zDir);
+        RmajC = temp;
+
+        // if (DEBUG) {
+        // Base::Console().message("[makeThread DEBUG]: Profile Points Position:\n");
+        // Base::Console().message("  p1 -> X: %.6f, Y: %.6f, Z: %.6f\n", p1.X(), p1.Y(), p1.Z());
+        // Base::Console().message("  p2 -> X: %.6f, Y: %.6f, Z: %.6f\n", p2.X(), p2.Y(), p2.Z());
+        // Base::Console().message("  p3 -> X: %.6f, Y: %.6f, Z: %.6f\n", p3.X(), p3.Y(), p3.Z());
+        // Base::Console().message("  p4 -> X: %.6f, Y: %.6f, Z: %.6f\n", p4.X(), p4.Y(), p4.Z());
+
+        // double d_p1_p2 = p1.Distance(p2);
+        // double d_p2_p3 = p2.Distance(p3);
+        // double d_p3_p4 = p3.Distance(p4);
+        // double d_p4_p1 = p4.Distance(p1);
+
+        // if (DEBUG) {
+        // Base::Console().message("[makeThread DEBUG]: Profile Edges Distances:\n");
+        // Base::Console().message("  p1 -> p2: %.6f mm\n", d_p1_p2);
+        // Base::Console().message("  p2 -> p3: %.6f mm\n", d_p2_p3);
+        // Base::Console().message("  p3 -> p4: %.6f mm\n", d_p3_p4);
+        // Base::Console().message("  p4 -> p1: %.6f mm\n", d_p4_p1);
+        // }
 
         if (DEBUG) Base::Console().message("[makeThread]: Adding initial edge (p1 -> p2) to wire...\n");
         mkThreadWire.Add(BRepBuilderAPI_MakeEdge(p1, p2).Edge());
@@ -1029,42 +1116,53 @@ TopoDS_Shape ThreadUtils::makeThread(
 
     // create the helix path
     // double threadDepth = ThreadDepth.getValue();
+    Base::Console().message("[makeThread]: start preparing length\n");
     double threadDepth = length;
-    double helixLength = threadDepth + Pitch / 2;
+    double helixLength = threadDepth;//pitch / 2;
     // double holeDepth = Depth.getValue();
-    double holeDepth = 4;
+    double holeDepth = threadDepth;
     // std::string threadDepthMethod(ThreadDepthType.getValueAsString());
     std::string threadDepthMethod("Dimension");
     // std::string depthMethod(DepthType.getValueAsString());
-    std::string depthMethod("");
-    if (threadDepthMethod != "Dimension") {
-        if (depthMethod == "ThroughAll") {
-            threadDepth = length;
-            // ThreadDepth.setValue(threadDepth);
-            helixLength = threadDepth + 2 * Pitch;
-        }
-        else if (threadDepthMethod == "Tapped (DIN76)") {
-            // threadDepth = holeDepth - getThreadRunout();
-            // ThreadDepth.setValue(threadDepth);
-            helixLength = threadDepth + Pitch / 2;
-        }
-        else {  // Hole depth
-            threadDepth = holeDepth;
-            // ThreadDepth.setValue(threadDepth);
-            helixLength = threadDepth + Pitch / 8;
-        }
-    }
-    else {
-        if (depthMethod == "Dimension") {
-            // the thread must not be deeper than the hole
-            // thus the max helixLength is holeDepth + P / 8;
-            if (threadDepth > (holeDepth - Pitch / 2)) {
-                helixLength = holeDepth + Pitch / 8;
-            }
-        }
-    }
+    std::string depthMethod("Dimension");
+    // if (threadDepthMethod != "Dimension") {
+    //     if (depthMethod == "ThroughAll") {
+    //         threadDepth = length;
+    //         // ThreadDepth.setValue(threadDepth);
+    //         helixLength = threadDepth + 2 * Pitch;
+    //     }
+    //     else if (threadDepthMethod == "Tapped (DIN76)") {
+    //         // threadDepth = holeDepth - getThreadRunout();
+    //         // ThreadDepth.setValue(threadDepth);
+    //         helixLength = threadDepth + Pitch / 2;
+    //     }
+    //     else {  // Hole depth
+    //         threadDepth = holeDepth;
+    //         // ThreadDepth.setValue(threadDepth);
+    //         helixLength = threadDepth + Pitch / 8;
+    //     }
+    // }
+    // else {
+    //     if (depthMethod == "Dimension") {
+    //         // the thread must not be deeper than the hole
+    //         // thus the max helixLength is holeDepth + P / 8;
+    //         if (threadDepth > (holeDepth - Pitch / 2)) {
+    //             helixLength = holeDepth + Pitch / 8;
+    //         }
+    //         Base::Console().message("[makeThread]: dimension: %lf\n", helixLength);
+    //     }
+    // }
     double helixAngle = tapered ?  90 - taperedAngle : 0.0;
-    // double helixAngle = 0.0;
+    Base::Console().message("[makeThread]: finished preparing length\n");
+    Base::Console().message(
+        "[makeThread]: Calling makeLongHelix with Pitch: %.4f, helixLength: %.4f, Rmaj: %.4f, helixAngle: %.4f, leftHanded: %s\n",
+        Pitch,
+        helixLength,
+        Rmaj,
+        helixAngle,
+        leftHanded ? "true" : "false"
+    );
+
     TopoDS_Shape helix = TopoShape().makeLongHelix(Pitch, helixLength, Rmaj, helixAngle, leftHanded);
 
     gp_Pnt origo(0.0, 0.0, 0.0);
@@ -1126,9 +1224,6 @@ TopoDS_Shape ThreadUtils::makeThread(
 
     // we are done
     return result;
-
-    // TopoDS_Shape emptyTopoDS_Shape;
-    // return emptyTopoDS_Shape;
 }
 
 
@@ -1897,6 +1992,7 @@ gp_Pnt ThreadUtils::getThreadStartPoint(const App::PropertyLinkSub& lateralFace,
     return startPoint;
 }
 
+
 Part::TopoShape ThreadUtils::reduceExternalThreadBase(
     Part::TopoShape base,
     const App::PropertyLinkSub& lateralFace,
@@ -1905,41 +2001,65 @@ Part::TopoShape ThreadUtils::reduceExternalThreadBase(
     double length
 )
 {
+    if (DEBUG) {
+        Base::Console().message("[reduceExternalThreadBase]: Starting external thread base reduction...\n");
+        Base::Console().message("[reduceExternalThreadBase]: Inputs -> majorDiameter: %.4f, minorDiameter: %.4f, length: %.4f\n",
+                                majorDiameter, minorDiameter, length);
+    }
+
     gp_Vec zDir = getThreadZAxis(lateralFace);
     zDir.Normalize();
 
     gp_Pnt startPoint = getThreadStartPoint(lateralFace, gp_Dir(zDir));
-    // if (DEBUG) Base::Console()essage("getThreadStartPoint.Z(): %lf\n", startPoint.Z());
-    // gp_Pnt startPoint = getThreadAxisOrigin(lateralFace);
+
+    if (DEBUG) {
+        Base::Console().message("[reduceExternalThreadBase]: Thread Z Axis direction: (%.4f, %.4f, %.4f)\n", 
+                                zDir.X(), zDir.Y(), zDir.Z());
+        Base::Console().message("[reduceExternalThreadBase]: Thread Start Point: (%.4f, %.4f, %.4f)\n", 
+                                startPoint.X(), startPoint.Y(), startPoint.Z());
+    }
 
     gp_Ax2 axis(startPoint, gp_Dir(zDir));
 
     double majorRadius = majorDiameter / 2.0;
     double minorRadius = minorDiameter / 2.0;
 
+    if (DEBUG) {
+        Base::Console().message("[reduceExternalThreadBase]: Calculated Radii -> Outer (Major): %.4f, Inner (Minor): %.4f\n", 
+                                majorRadius, minorRadius);
+    }
+
     BRepPrimAPI_MakeCylinder outer(axis, majorRadius, length);
     BRepPrimAPI_MakeCylinder inner(axis, minorRadius, length);
+
     if (outer.Shape().IsNull() || inner.Shape().IsNull()) {
+        if (DEBUG) Base::Console().error("[reduceExternalThreadBase]: Failed to create reduction cylinders (IsNull)!\n");
         throw Base::RuntimeError("Thread error: failed to create thread reduction cylinders");
     }
 
+    if (DEBUG) Base::Console().message("[reduceExternalThreadBase]: Outer and inner cylinders created. Building ring cut...\n");
+
     // Builds the ring
     BRepAlgoAPI_Cut ring(outer.Shape(), inner.Shape());
-
     ring.Build();
 
     if (!ring.IsDone()) {
+        if (DEBUG) Base::Console().error("[reduceExternalThreadBase]: Ring cut operation failed (!IsDone)!\n");
         throw Base::RuntimeError("Thread error: failed to create thread reduction volume");
     }
 
+    if (DEBUG) Base::Console().message("[reduceExternalThreadBase]: Ring volume created. Cutting ring from base shape...\n");
+
     // Removes the ring
     BRepAlgoAPI_Cut result(base.getShape(), ring.Shape());
-
     result.Build();
 
     if (!result.IsDone() || result.Shape().IsNull()) {
+        if (DEBUG) Base::Console().error("[reduceExternalThreadBase]: Base reduction cut failed (!IsDone or IsNull)!\n");
         throw Base::RuntimeError("Thread error: failed to reduce external thread base");
     }
+
+    if (DEBUG) Base::Console().message("[reduceExternalThreadBase]: External thread base reduction completed successfully.\n");
 
     return Part::TopoShape(result.Shape());
 }
