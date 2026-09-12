@@ -17,10 +17,25 @@
 #include <BRepAdaptor_Surface.hxx>
 #include <GeomAbs_SurfaceType.hxx>
 
+#include <GProp_GProps.hxx>
+#include <BRepGProp.hxx>
+#include <Bnd_Box.hxx>
+#include <BRepBndLib.hxx>
+
 #include <Mod/Part/App/Geometry.h>
 #include <Mod/Sketcher/App/Constraint.h>
 
 // NOLINTBEGIN(readability-magic-numbers,cppcoreguidelines-avoid-magic-numbers)
+
+static int findEnumIndex(const std::vector<std::string>& enums, const std::string& needle)
+{
+    for (size_t i = 0; i < enums.size(); ++i) {
+        if (enums[i].find(needle) != std::string::npos) {
+            return static_cast<int>(i);
+        }
+    }
+    return -1;
+}
 
 class ThreadTest: public ::testing::Test
 {
@@ -67,11 +82,21 @@ protected:
         return _sketch;
     }
 
-    PartDesign::Pad* createCylinderPad(double length = 30.0)
+    PartDesign::Pad* createCylinderPad(double length = 30.0, double radius = 10.0)
     {
         auto doc = getDocument();
         auto body = getBody();
         auto sketch = getSketch();
+
+        // Overwrite whatever geometry SetUp() left in the sketch (a radius-10.0
+        // circle) so callers can request an arbitrary cylinder radius. This
+        // mirrors how createCubePad() replaces the sketch contents below.
+        sketch->Geometry.setValues({});
+        sketch->Constraints.setValues({});
+
+        Part::GeomCircle circle;
+        circle.setRadius(radius);
+        sketch->addGeometry(&circle, false);
 
         auto pad = doc->addObject<PartDesign::Pad>("Pad");
         body->addObject(pad);
@@ -166,7 +191,8 @@ TEST_F(ThreadTest, ThreadCreationOnCylinder)
 {
     auto doc = getDocument();
     auto body = getBody();
-    auto pad = createCylinderPad(30.0);
+    //TODO: now that threadtype matters, change magic numbers for automatic diameter
+    auto pad = createCylinderPad(30.0, 12.7);
     ASSERT_NE(pad, nullptr);
     auto thread = doc->addObject<PartDesign::Thread>("Thread");
     body->addObject(thread);
@@ -215,6 +241,86 @@ TEST_F(ThreadTest, EmptyThread)
     EXPECT_FALSE(thread->isError())
         << "Feature thread has failed during recompute " << thread->getStatusString();
     EXPECT_TRUE(thread->isValid()) << "Feature Thread is not valid.";
+}
+
+TEST_F(ThreadTest, ExternalThreadModeledM24Signature)
+{
+    auto doc = getDocument();
+    auto body = getBody();
+    auto pad = createCylinderPad(24.0, 12.0);  // 24mm Height, 24mm diameter
+    ASSERT_NE(pad, nullptr);
+
+    auto thread = doc->addObject<PartDesign::Thread>("Thread");
+    body->addObject(thread);
+
+    auto lateralFace = getLateralFaceName(pad);
+    ASSERT_TRUE(lateralFace.has_value());
+    thread->LateralFace.setValue(pad, {*lateralFace});
+
+    thread->DepthType.setValue(0L); // "Dimension"
+    thread->Depth.setValue(24.0);
+
+    int typeIdx = findEnumIndex(thread->ThreadType.getEnumVector(), "ISOMetricProfile");
+    ASSERT_GE(typeIdx, 0) << "ISOMetricProfile was not found in enum";
+    thread->ThreadType.setValue(typeIdx); // ISOMetricProfile
+
+    int sizeIdx = findEnumIndex(thread->ThreadSize.getEnumVector(), "24");
+    ASSERT_GE(sizeIdx, 0) << "24mm Diameter was not found in enum";
+    thread->ThreadSize.setValue(sizeIdx);
+
+    int pitchIdx = findEnumIndex(thread->ThreadSizePitch.getEnumVector(), "3");
+    ASSERT_GE(pitchIdx, 0) << "3mm Pitch was not found in enum";
+    thread->ThreadSizePitch.setValue(pitchIdx);
+
+    thread->UseCustomThreadClearance.setValue(true);
+    thread->CustomThreadClearance.setValue(0.0);
+
+    thread->ModelThread.setValue(true);
+    thread->CosmeticThread.setValue(false);
+
+    doc->recompute();
+
+    ASSERT_FALSE(thread->isError()) << thread->getStatusString();
+    ASSERT_TRUE(thread->isValid());
+
+    const TopoDS_Shape& shape = thread->Shape.getValue();
+
+    GProp_GProps volProps;
+    BRepGProp::VolumeProperties(shape, volProps);
+    EXPECT_NEAR(volProps.Mass(), 9148.3173087740, 1e-3);
+
+    GProp_GProps surfProps;
+    BRepGProp::SurfaceProperties(shape, surfProps);
+    EXPECT_NEAR(surfProps.Mass(), 3263.1677409043, 1e-3);
+
+    gp_Pnt com = volProps.CentreOfMass();
+    EXPECT_NEAR(com.X(), -0.0000008803, 1e-3);
+    EXPECT_NEAR(com.Y(), -0.0000019246, 1e-3);
+    EXPECT_NEAR(com.Z(), 12.0000047625, 1e-3);
+
+    Bnd_Box box;
+    BRepBndLib::Add(shape, box);
+    double xmin, ymin, zmin, xmax, ymax, zmax;
+    box.Get(xmin, ymin, zmin, xmax, ymax, zmax);
+    
+    EXPECT_NEAR(xmin, -12.0000405873, 1e-3);
+    EXPECT_NEAR(xmax, 13.0767180177, 1e-3);
+    EXPECT_NEAR(ymin, -13.4439231178, 1e-3);
+    EXPECT_NEAR(ymax, 13.4439617164, 1e-3);
+    EXPECT_NEAR(zmin, -0.0000001000, 1e-3);
+    EXPECT_NEAR(zmax, 24.0000001000, 1e-3);
+
+    int nFaces = 0, nEdges = 0, nVertices = 0;
+    for (TopExp_Explorer e(shape, TopAbs_FACE); e.More(); e.Next()) ++nFaces;
+    for (TopExp_Explorer e(shape, TopAbs_EDGE); e.More(); e.Next()) ++nEdges;
+    for (TopExp_Explorer e(shape, TopAbs_VERTEX); e.More(); e.Next()) ++nVertices;
+    EXPECT_EQ(nFaces, 33);
+    EXPECT_EQ(nEdges, 130);
+    EXPECT_EQ(nVertices, 260);
+
+    EXPECT_NEAR(thread->Diameter.getValue(), 24.0, 1e-9);
+    EXPECT_FALSE(thread->IsInternal.getValue());
+    EXPECT_EQ(std::string(thread->ThreadDesignation.getValue()), "M24x3.0");
 }
 
 // NOLINTEND(readability-magic-numbers,cppcoreguidelines-avoid-magic-numbers)
