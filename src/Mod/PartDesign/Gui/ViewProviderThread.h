@@ -34,6 +34,7 @@
 class SoTexture2Transform;
 class SoSeparator;
 class SoClipPlane;
+class SoToggleSwitch;
 class QMenu;
 
 namespace App
@@ -69,9 +70,9 @@ public:
     /// constructor
     ViewProviderThread();
     
-     /// destructor
-    // ~ViewProviderThread() override;
-    // bool onDelete(const std::vector<std::string>& arg) override;
+    /// destructor
+    ~ViewProviderThread() override;
+    bool onDelete(const std::vector<std::string>& arg) override;
 
     /// grouping handling
     // std::vector<App::DocumentObject*> claimChildren() const override;
@@ -80,14 +81,25 @@ public:
     SoSeparator* createThreadTextureSeparator();
     bool isHoleThreadVisible() const;
     void updateOverlay() override;
+    void showPreview(bool enable) override;
 
 protected:
     /// Returns a newly create dialog for the part to be placed in the task view
     TaskDlgFeatureParameters* getEditDialog() override;
     void updateData(const App::Property* prop) override;
+    void onChanged(const App::Property* prop) override;
+    void attachPreview() override;
+    void updatePreview() override;
 
 private:
     std::unique_ptr<Gui::ViewProviderTextureExtension> textureExtension;
+    Gui::CoinPtr<PartGui::SoPreviewShape> pcReducedBasePreview;
+    Gui::CoinPtr<SoToggleSwitch> pcReducedBaseToggle;
+    bool baseHiddenForPreview {false};
+
+    PartDesignGui::ViewProvider* getBaseFeatureViewProvider() const;
+    void syncExternalPreviewVisibility();
+    void restoreBaseVisibility();
     std::optional<gp_Dir> getThreadNormal(const PartDesign::Thread* pcThread) const;
     std::optional<gp_Pnt> getThreadOrigin(const PartDesign::Thread* pcThread) const;
     std::vector<gp_Pnt> getThreadLocations(const PartDesign::Thread* pcThread) const;

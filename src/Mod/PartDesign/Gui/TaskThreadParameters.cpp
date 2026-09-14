@@ -31,6 +31,7 @@
 #include <Base/Interpreter.h>
 #include <Gui/Selection/Selection.h>
 #include <Gui/ViewProvider.h>
+// #include <Gui/ViewProviderThread.h>
 #include <Mod/PartDesign/Gui/ReferenceSelection.h>
 #include <Mod/PartDesign/App/FeatureThread.h>
 

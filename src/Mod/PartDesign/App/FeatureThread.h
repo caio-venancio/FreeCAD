@@ -92,12 +92,15 @@ public:
     double getThreadPitch() const;
     std::optional<gp_Pnt> getThreadOrigin() const;
     std::optional<gp_Dir> getThreadNormal() const;
+    const Part::TopoShape& getReducedBasePreviewShape() const;
 
 protected:
     void onChanged(const App::Property* prop) override;
+    void updatePreviewShape() override;
     
 private:
     ThreadUtils threadUtils;
+    Part::TopoShape reducedBasePreviewShape;
     void addThreadType();
 };
 

@@ -72,6 +72,7 @@
 #include <Inventor/nodes/SoTexture2Transform.h>
 #include <Inventor/nodes/SoTextureCoordinate2.h>
 #include <Inventor/nodes/SoTransparencyType.h>
+#include <Gui/Inventor/SoToggleSwitch.h>
 
 #include "TaskThreadParameters.h"
 #include "ViewProviderThread.h"
@@ -84,19 +85,40 @@ bool DEBUG = false;
 
 ViewProviderThread::ViewProviderThread()
     : textureExtension(std::make_unique<Gui::ViewProviderTextureExtension>())
+    , pcReducedBasePreview(new PartGui::SoPreviewShape)
+    , pcReducedBaseToggle(new SoToggleSwitch)
 {
     sPixmap = "PartDesign_Thread.svg";
     menuName = tr("Thread Parameters");
 }
 
 
-// ViewProviderThread::~ViewProviderThread() = default;
+ViewProviderThread::~ViewProviderThread() = default;
 
-// bool ViewProviderHole::onDelete(const std::vector<std::string>& arg)
-// {
-    // clearThreadTextures();
-    // return PartDesignGui::ViewProviderDressUp::onDelete(arg);
-// }
+bool ViewProviderThread::onDelete(const std::vector<std::string>& arg)
+{
+    restoreBaseVisibility();
+    clearThreadTextures();
+    return PartDesignGui::ViewProviderDressUp::onDelete(arg);
+}
+
+void ViewProviderThread::clearThreadTextures()
+{
+    if (m_threadOverlays.empty()) {
+        return;
+    }
+
+    auto* bodyVp = getBodyViewProvider();
+    SoGroup* root = bodyVp ? bodyVp->getRoot() : nullptr;
+
+    for (auto const& [hole, sw] : m_threadOverlays) {
+        if (root && root->findChild(sw) >= 0) {
+            root->removeChild(sw);
+        }
+        sw->unref();
+    }
+    m_threadOverlays.clear();
+}
 
 const std::string& ViewProviderThread::featureName() const
 {
@@ -146,7 +168,120 @@ void ViewProviderThread::updateData(const App::Property* prop)
         if (DEBUG) Base::Console().message("exit thread direction\n");
         return;
     }
+    if (prop == &pcThread->Visibility) {
+        if (DEBUG) Base::Console().message("[updateData]: Visibility changed -> updateOverlay\n");
+        updateOverlay();
+        return;
+    }
     // if (DEBUG) Base::Console().message("I'm ending!!!\n");
+}
+
+void ViewProviderThread::onChanged(const App::Property* prop)
+{
+    ViewProviderDressUp::onChanged(prop);
+
+    if (prop == &Visibility) {
+        syncExternalPreviewVisibility();
+    }
+}
+
+void ViewProviderThread::attachPreview()
+{
+    ViewProviderDressUp::attachPreview();
+
+    pcReducedBasePreview->transparency = 0.0F;
+    pcReducedBasePreview->lineWidth.connectFrom(&pcPreviewShape->lineWidth);
+    pcReducedBaseToggle->addChild(pcReducedBasePreview);
+
+    // Render the opaque reduced base before the translucent thread tool.
+    pcPreviewRoot->insertChild(pcReducedBaseToggle, 0);
+}
+
+void ViewProviderThread::updatePreview()
+{
+    // The shared preview updater ignores empty shapes. Clear this feature's retained geometry
+    // first so switching from modelled to cosmetic mode cannot leave a stale thread visible.
+    PartGui::ViewProviderPartExt::setupCoinGeometry(
+        TopoDS_Shape(),
+        pcPreviewShape,
+        Deviation.getValue(),
+        AngularDeflection.getValue()
+    );
+
+    // PreviewShape already contains either the additive thread or the intersected removed volume.
+    // Do not invoke ViewProvider::updatePreview(), which would add the full subtractive tool too.
+    PartGui::ViewProviderPreviewExtension::updatePreview();
+
+    auto* thread = getObject<PartDesign::Thread>();
+    Part::TopoShape reducedBase = thread ? thread->getReducedBasePreviewShape() : Part::TopoShape();
+    PartGui::ViewProviderPartExt::setupCoinGeometry(
+        reducedBase.getShape(),
+        pcReducedBasePreview,
+        Deviation.getValue(),
+        AngularDeflection.getValue()
+    );
+
+    if (auto* baseViewProvider = getBaseFeatureViewProvider()) {
+        pcReducedBasePreview->color.setValue(
+            baseViewProvider->ShapeAppearance.getDiffuseColor().asValue<SbColor>()
+        );
+    }
+
+    syncExternalPreviewVisibility();
+}
+
+void ViewProviderThread::showPreview(bool enable)
+{
+    ViewProviderDressUp::showPreview(enable);
+    syncExternalPreviewVisibility();
+}
+
+PartDesignGui::ViewProvider* ViewProviderThread::getBaseFeatureViewProvider() const
+{
+    auto* thread = getObject<PartDesign::Thread>();
+    auto* baseFeature = thread
+        ? freecad_cast<PartDesign::Feature*>(thread->BaseFeature.getValue())
+        : nullptr;
+
+    return baseFeature
+        ? freecad_cast<PartDesignGui::ViewProvider*>(
+              Gui::Application::Instance->getViewProvider(baseFeature)
+          )
+        : nullptr;
+}
+
+void ViewProviderThread::restoreBaseVisibility()
+{
+    if (!baseHiddenForPreview) {
+        return;
+    }
+
+    if (auto* baseViewProvider = getBaseFeatureViewProvider()) {
+        if (baseViewProvider->Visibility.getValue()) {
+            baseViewProvider->Gui::ViewProvider::show();
+        }
+    }
+    baseHiddenForPreview = false;
+}
+
+void ViewProviderThread::syncExternalPreviewVisibility()
+{
+    auto* thread = getObject<PartDesign::Thread>();
+    const bool replaceBase = thread && isPreviewEnabled() && !Visibility.getValue()
+        && thread->ModelThread.getValue() && !thread->IsInternal.getValue()
+        && !thread->getReducedBasePreviewShape().isNull();
+
+    pcReducedBaseToggle->on = replaceBase;
+
+    if (!replaceBase) {
+        restoreBaseVisibility();
+        return;
+    }
+
+    if (auto* baseViewProvider = getBaseFeatureViewProvider()) {
+        baseViewProvider->Gui::ViewProvider::hide();
+        baseHiddenForPreview = true;
+    }
 }
 
 SoSeparator* ViewProviderThread::createThreadTextureSeparator()

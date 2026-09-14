@@ -526,31 +526,96 @@ std::vector<std::string> ThreadUtils::getThreadDiameters(const int threadType) c
     return designations;
 }
 
+// std::vector<std::string> ThreadUtils::getThreadMinorDiameters(const int threadType)
+// {
+//     std::vector<std::string> currentThreads = ThreadUtils::getThreadTypeNameEnums();
+//     std::string currentThread = currentThreads[threadType];
+//     int currentThreadTypeIndex = threadTypeFromString(currentThread);
+//     // if (DEBUG) Base::Console().message("real int: %d\n", currentThreadTypeIndex);
+
+//     std::vector<std::string> minorDiameters;  // diameters
+//     const auto& definitions = getThreadDefinitions();
+//     for (const auto& definition : definitions) {
+//         if (definition.name == currentThread) {
+//             minorDiameters = definition.minorDiameters;
+//             break;
+//         }
+//     }
+//     if (minorDiameters.empty()) {
+//         return {"6.0"};
+//     }
+
+//     std::set<double> uniqueMinorDiameters;
+
+//     // for (const auto& thread : ThreadUtils::threadDescription[currentThreadTypeIndex]) {
+//     for (const auto& minorDiameter : minorDiameters) {
+//         uniqueMinorDiameters.insert(std::stod(minorDiameter));
+//         // uniqueDiameters.insert(thread.diameter);
+//     }
+
+//     std::vector<std::string> designations;
+//     designations.reserve(uniqueMinorDiameters.size());
+
+//     for (double diameter : uniqueMinorDiameters) {
+//         std::ostringstream oss;
+
+//         oss << std::noshowpoint << diameter << " mm";
+//         designations.push_back(oss.str());
+//     }
+//     return designations;
+// }
+
 std::vector<std::string> ThreadUtils::getThreadMinorDiameters(const int threadType)
 {
     std::vector<std::string> currentThreads = ThreadUtils::getThreadTypeNameEnums();
     std::string currentThread = currentThreads[threadType];
     int currentThreadTypeIndex = threadTypeFromString(currentThread);
-    // if (DEBUG) Base::Console().message("real int: %d\n", currentThreadTypeIndex);
 
-    std::vector<std::string> minorDiameters;  // diameters
+    std::vector<std::string> minorDiameters, sizes, pitches;
     const auto& definitions = getThreadDefinitions();
     for (const auto& definition : definitions) {
         if (definition.name == currentThread) {
             minorDiameters = definition.minorDiameters;
+            sizes = definition.sizes;
+            pitches = definition.pitches;
             break;
         }
-    }
-    if (minorDiameters.empty()) {
-        return {"6.0"};
     }
 
     std::set<double> uniqueMinorDiameters;
 
-    // for (const auto& thread : ThreadUtils::threadDescription[currentThreadTypeIndex]) {
-    for (const auto& minorDiameter : minorDiameters) {
-        uniqueMinorDiameters.insert(std::stod(minorDiameter));
-        // uniqueDiameters.insert(thread.diameter);
+    // Tenta utilizar os minorDiameters se estiverem preenchidos na definição
+    bool hasMinorDiameters = !minorDiameters.empty();
+    if (hasMinorDiameters) {
+        for (const auto& minorDiameter : minorDiameters) {
+            if (!minorDiameter.empty()) {
+                double val = std::abs(std::stod(minorDiameter));
+                if (val > Precision::Confusion()) {
+                    uniqueMinorDiameters.insert(val);
+                }
+            }
+        }
+    }
+
+    // Se minorDiameters estiver vazio ou não contiver valores válidos, calcula a estimativa
+    if (uniqueMinorDiameters.empty() && !sizes.empty() && !pitches.empty()) {
+        std::string threadTypeStr = ThreadTypeEnums[currentThreadTypeIndex];
+        size_t count = std::min(sizes.size(), pitches.size());
+        for (size_t i = 0; i < count; ++i) {
+            if (!sizes[i].empty() && !pitches[i].empty()) {
+                double majorDiameter = std::stod(sizes[i]);
+                double pitch = std::stod(pitches[i]);
+                double estimated = estimateMinorDiameterFromProfile(threadTypeStr, majorDiameter, pitch) + 0.01;
+                if (estimated > Precision::Confusion()) {
+                    uniqueMinorDiameters.insert(estimated);
+                }
+            }
+        }
+    }
+
+    // Fallback padrão de segurança caso ainda permaneça sem dados
+    if (uniqueMinorDiameters.empty()) {
+        return {"6.0 mm"};
     }
 
     std::vector<std::string> designations;
@@ -558,10 +623,10 @@ std::vector<std::string> ThreadUtils::getThreadMinorDiameters(const int threadTy
 
     for (double diameter : uniqueMinorDiameters) {
         std::ostringstream oss;
-
         oss << std::noshowpoint << diameter << " mm";
         designations.push_back(oss.str());
     }
+
     return designations;
 }
 

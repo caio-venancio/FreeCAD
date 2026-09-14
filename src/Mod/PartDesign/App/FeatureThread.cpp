@@ -115,6 +115,11 @@ Thread::Thread()
 
 App::DocumentObjectExecReturn* Thread::execute()
 {
+    // AddSubShape caches the operation tool used by the preview and by transformed features.
+    // Clear it before rebuilding so invalid or cosmetic threads cannot retain stale geometry.
+    AddSubShape.setValue(Part::TopoShape());
+    reducedBasePreviewShape = Part::TopoShape();
+
     Part::TopoShape base;
     try {
         base = getBaseTopoShape();
@@ -151,10 +156,13 @@ App::DocumentObjectExecReturn* Thread::execute()
     Diameter.setValue(diameter);
 
     int nearestSize = -1;
+    std::vector<std::string> diameters;
     if (!IsInternal.getValue()) {
+        diameters = threadUtils.getThreadDiameters(ThreadType.getValue());
         nearestSize = threadUtils.findNearestThreadSize(ThreadType.getValue(), diameter);
     }
     else {
+        diameters = threadUtils.getThreadMinorDiameters(ThreadType.getValue());
         nearestSize = threadUtils.findNearestMinorThreadSize(ThreadType.getValue(), diameter);
     }
 
@@ -164,7 +172,7 @@ App::DocumentObjectExecReturn* Thread::execute()
         );
     }
 
-    std::vector<std::string> diameters = threadUtils.getThreadDiameters(ThreadType.getValue());
+    
     if (nearestSize >= static_cast<int>(diameters.size())) {
         return new App::DocumentObjectExecReturn(
             QT_TRANSLATE_NOOP("Exception", "Thread error: Thread size index out of definition range.")
@@ -343,6 +351,7 @@ App::DocumentObjectExecReturn* Thread::execute()
 
             if (base.isNull()) {
                 Shape.setValue(protoThread);
+                AddSubShape.setValue(protoThread);
                 return App::DocumentObject::StdReturn;
             }
 
@@ -378,7 +387,11 @@ App::DocumentObjectExecReturn* Thread::execute()
                 ));
             }
 
+            if (!IsInternal.getValue()) {
+                reducedBasePreviewShape = base;
+            }
             this->Shape.setValue(result);
+            AddSubShape.setValue(protoThread);
 
         } else {
             this->positionByBaseFeature();
@@ -395,6 +408,23 @@ App::DocumentObjectExecReturn* Thread::execute()
     }
 
     return App::DocumentObject::StdReturn;
+}
+
+const Part::TopoShape& Thread::getReducedBasePreviewShape() const
+{
+    return reducedBasePreviewShape;
+}
+
+void Thread::updatePreviewShape()
+{
+    if (!ModelThread.getValue() || AddSubShape.getShape().isNull()) {
+        PreviewShape.setValue(Part::TopoShape());
+        return;
+    }
+
+    // Thread is a dress-up feature, but its preview is an explicit additive/subtractive tool.
+    // Use FeatureAddSub's tool preview instead of DressUp's generated-face preview.
+    FeatureAddSub::updatePreviewShape();
 }
 
 void Thread::onChanged(const App::Property* prop)

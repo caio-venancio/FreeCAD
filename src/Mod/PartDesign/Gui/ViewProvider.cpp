@@ -213,6 +213,7 @@ void ViewProvider::unsetEdit(int ModNum)
 void ViewProvider::updateData(const App::Property* prop)
 {
     if (strcmp(prop->getName(), "PreviewShape") == 0) {
+        Base::Console().message("[viewProvider]: updateData\n");
         updatePreview();
     }
     else if (auto* previewExtension = getObject()->getExtensionByType<Part::PreviewExtension>(true)) {
@@ -250,6 +251,7 @@ void ViewProvider::attachPreview()
 void ViewProvider::updatePreview()
 {
     ViewProviderPreviewExtension::updatePreview();
+    Base::Console().message("[ViewProvider]: updatePreview\n");
 
     if (auto* addSubFeature = getObject<PartDesign::FeatureAddSub>()) {
         // we only want to show the additional tool preview for subtractive features
