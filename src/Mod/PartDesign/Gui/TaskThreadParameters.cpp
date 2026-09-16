@@ -29,6 +29,7 @@
 #include <App/Document.h>
 #include <App/DocumentObject.h>
 #include <Base/Interpreter.h>
+#include <Gui/Application.h>
 #include <Gui/Selection/Selection.h>
 #include <Gui/ViewProvider.h>
 // #include <Gui/ViewProviderThread.h>
@@ -703,6 +704,37 @@ bool TaskDlgThreadParameters::accept()
 {
     parameter->apply();
     return TaskDlgDressUpParameters::accept();
+}
+
+bool TaskDlgThreadParameters::reject()
+{
+    auto* thread = getObject<PartDesign::Thread>();
+    App::Document* document = thread ? thread->getDocument() : nullptr;
+    const std::string threadName
+        = thread && thread->getNameInDocument() ? thread->getNameInDocument() : "";
+
+    // The transaction abort can remove a newly-created Thread from its Body before the view
+    // provider is destroyed. Detach scene-graph state while all owning objects are still valid.
+    if (auto* threadView = getViewObject<ViewProviderThread>()) {
+        threadView->restoreBaseVisibility();
+        threadView->clearThreadTextures();
+    }
+
+    const bool result = TaskDlgDressUpParameters::reject();
+
+    // When cancelling an edit of an existing Thread, the object survives the rollback. Rebuild
+    // the overlay from the restored properties; a newly-created and cancelled Thread is absent.
+    auto* restoredThread = document && !threadName.empty()
+        ? dynamic_cast<PartDesign::Thread*>(document->getObject(threadName.c_str()))
+        : nullptr;
+    if (restoredThread) {
+        if (auto* restoredView = dynamic_cast<ViewProviderThread*>(
+                Gui::Application::Instance->getViewProvider(restoredThread))) {
+            restoredView->updateOverlay();
+        }
+    }
+
+    return result;
 }
 
 #include "moc_TaskThreadParameters.cpp"

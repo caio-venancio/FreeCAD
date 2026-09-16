@@ -142,9 +142,7 @@ App::DocumentObjectExecReturn* Thread::execute()
     auto res = threadUtils.validateParameters(LateralFace);
     if (res != App::DocumentObject::StdReturn) {
         Base::Console().error("Failed to create thread:\n%s\n", res->Why.c_str());
-
-        throw Base::RuntimeError(res->Why);
-
+        // throw Base::RuntimeError(res->Why);
         return res;
     }
 
@@ -273,36 +271,35 @@ App::DocumentObjectExecReturn* Thread::execute()
             );
         }
 
-        if (!IsInternal.getValue()) {
-            Base::Console().message("Lowering cylinder\n");
-
-            double majorDiameter = threadUtils.getLateralFaceDiameter(LateralFace);
-
-            double minorDiameter = threadUtils.getMinorDiameter(
-                ThreadType.getValue(),
-                ThreadSize.getValue()  //,
-                // ThreadClass
-            );
-
-            Base::Console().message("minorDiameter: %lf\n", minorDiameter);
-
-            Part::TopoShape reducedBase = threadUtils.reduceExternalThreadBase(
-                base,
-                LateralFace,
-                majorDiameter,
-                minorDiameter,
-                length
-            );
-
-            base = reducedBase;
-        }
-
         // this->Shape.setValue(base);
         // return App::DocumentObject::StdReturn;
 
         // if (Threaded.getValue() && ModelThread.getValue()) {
         if (ModelThread.getValue()) {
-            // gp_Vec zDirFixed = zDir.Reversed(); 
+            // A modelled external thread replaces the selected major-diameter surface with the
+            // reduced base before fusing the thread profile.  Cosmetic threads must retain the
+            // original base so their overlay is drawn on the actual external surface.
+            if (!IsInternal.getValue()) {
+                Base::Console().message("Lowering cylinder\n");
+
+                double majorDiameter = threadUtils.getLateralFaceDiameter(LateralFace);
+                double minorDiameter = threadUtils.getMinorDiameter(
+                    ThreadType.getValue(),
+                    ThreadSize.getValue()
+                );
+
+                Base::Console().message("minorDiameter: %lf\n", minorDiameter);
+
+                base = threadUtils.reduceExternalThreadBase(
+                    base,
+                    LateralFace,
+                    majorDiameter,
+                    minorDiameter,
+                    length
+                );
+            }
+
+            // gp_Vec zDirFixed = zDir.Reversed();
 
             TopoDS_Shape thread = threadUtils.makeThread(
                     xDir, 
@@ -521,6 +518,10 @@ void Thread::onChanged(const App::Property* prop)
 
         double diameter = 0.0;
         try {
+            auto res = threadUtils.validateParameters(LateralFace);
+            if (res != App::DocumentObject::StdReturn) {
+                return;
+            }
             diameter = threadUtils.getLateralFaceDiameter(LateralFace);
         }
         catch (const Standard_Failure& e) {

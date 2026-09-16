@@ -93,7 +93,10 @@ ViewProviderThread::ViewProviderThread()
 }
 
 
-ViewProviderThread::~ViewProviderThread() = default;
+ViewProviderThread::~ViewProviderThread()
+{
+    clearThreadTextures();
+}
 
 bool ViewProviderThread::onDelete(const std::vector<std::string>& arg)
 {
@@ -104,12 +107,7 @@ bool ViewProviderThread::onDelete(const std::vector<std::string>& arg)
 
 void ViewProviderThread::clearThreadTextures()
 {
-    if (m_threadOverlays.empty()) {
-        return;
-    }
-
-    auto* bodyVp = getBodyViewProvider();
-    SoGroup* root = bodyVp ? bodyVp->getRoot() : nullptr;
+    SoGroup* root = overlayRoot.get();
 
     for (auto const& [hole, sw] : m_threadOverlays) {
         if (root && root->findChild(sw) >= 0) {
@@ -118,6 +116,9 @@ void ViewProviderThread::clearThreadTextures()
         sw->unref();
     }
     m_threadOverlays.clear();
+    overlayRoot.reset();
+    m_endThreadClipper = nullptr;
+    m_textureTransform = nullptr;
 }
 
 const std::string& ViewProviderThread::featureName() const
@@ -659,7 +660,8 @@ std::vector<TopoDS_Face> ViewProviderThread::collectBoreFaces(const PartDesign::
     if (boreFaces.empty()) {
         if (DEBUG) Base::Console().warning("[collectBoreFaces]: Examined %zu faces but found NO matching bore faces! "
                                 "(Rejected: Type=%zu, Radius/Angle=%zu, Location=%zu, Parallelism=%zu)\n",
-                                totalFacesExamined, rejectedType, rejectedGeomProps, rejectedLocation, rejectedParallelism);
+                                totalFacesExamined, rejectedType, rejectedGeomProps, rejectedLocation,
+                                rejectedParallelism);
     } else {
         if (DEBUG) Base::Console().message("[collectBoreFaces]: Successfully collected %zu bore faces out of %zu examined faces\n",
                                 boreFaces.size(), totalFacesExamined);
@@ -745,7 +747,8 @@ SbVec2f ViewProviderThread::addVertex(
     const gp_Dir& y_dir,
     double minProj,
     double initialRadius,
-    double threadPitch
+    double threadPitch,
+    bool reverseNormal
 )
 {
     gp_Vec toPoint(origin, pt);
@@ -764,6 +767,9 @@ SbVec2f ViewProviderThread::addVertex(
     gp_Dir normalDir = (radialComp.SquareMagnitude() > std::pow(Precision::Confusion(), 2))
         ? gp_Dir(radialComp)
         : axis;
+    if (reverseNormal) {
+        normalDir.Reverse();
+    }
     normals.emplace_back(normalDir.X(), normalDir.Y(), normalDir.Z());
 
     return SbVec2f(uCoord, vCoord);
@@ -947,7 +953,8 @@ bool ViewProviderThread::generateBoreMeshData(
                 y_dir,
                 minProj,
                 initialRadius,
-                threadPitch
+                threadPitch,
+                face.Orientation() == TopAbs_REVERSED
             ));
         }
 
@@ -1057,30 +1064,14 @@ void ViewProviderThread::updateOverlay()
     bool isThreadVisible = isHoleThreadVisible();
     if (DEBUG) Base::Console().message("[updateOverlay]: Thread visibility status = %s\n", isThreadVisible ? "TRUE" : "FALSE");
 
+    // Cleanup must not depend on resolving the Body again: during transaction rollback the
+    // Thread can already be detached while its Coin node is still attached to the old root.
+    clearThreadTextures();
+
     auto* bodyVp = getBodyViewProvider();
     if (!bodyVp) {
         if (DEBUG) Base::Console().warning("[updateOverlay]: Body view provider is null, aborting\n");
         return;
-    }
-
-    // --- Cleanup ---
-    auto it = m_threadOverlays.find(thread);
-    if (it != m_threadOverlays.end()) {
-        if (DEBUG) Base::Console().message("[updateOverlay]: Cleaning up existing overlay for thread '%s'\n", thread->getNameInDocument());
-        SoSwitch* existingSwitch = it->second;
-        
-        if (bodyVp->getRoot()) {
-            bodyVp->getRoot()->removeChild(existingSwitch);
-            if (DEBUG) Base::Console().message("[updateOverlay]: Existing SoSwitch removed from scene graph root\n");
-        } else {
-            if (DEBUG) Base::Console().warning("[updateOverlay]: Scene graph root was null during cleanup\n");
-        }
-
-        existingSwitch->unref();
-        m_threadOverlays.erase(it);
-        if (DEBUG) Base::Console().message("[updateOverlay]: Cleanup complete and entry erased from map\n");
-    } else {
-        if (DEBUG) Base::Console().message("[updateOverlay]: No existing overlay found in map to clean up\n");
     }
 
     // --- Add the cosmetic thread overlay ---
@@ -1092,9 +1083,11 @@ void ViewProviderThread::updateOverlay()
             auto* threadSwitch = new SoSwitch();
             threadSwitch->ref();
             threadSwitch->addChild(newSep);
+            newSep->unref();
 
             if (bodyVp->getRoot()) {
-                bodyVp->getRoot()->addChild(threadSwitch);
+                overlayRoot = bodyVp->getRoot();
+                overlayRoot->addChild(threadSwitch);
                 threadSwitch->whichChild = SO_SWITCH_ALL;
                 m_threadOverlays[thread] = threadSwitch;
                 if (DEBUG) Base::Console().message("[updateOverlay]: New cosmetic thread successfully attached to scene graph (SoSwitch ptr:)\n");

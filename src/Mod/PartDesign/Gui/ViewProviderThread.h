@@ -33,6 +33,7 @@
 
 class SoTexture2Transform;
 class SoSeparator;
+class SoGroup;
 class SoClipPlane;
 class SoToggleSwitch;
 class QMenu;
@@ -92,9 +93,12 @@ protected:
     void updatePreview() override;
 
 private:
+    friend class TaskDlgThreadParameters;
+
     std::unique_ptr<Gui::ViewProviderTextureExtension> textureExtension;
     Gui::CoinPtr<PartGui::SoPreviewShape> pcReducedBasePreview;
     Gui::CoinPtr<SoToggleSwitch> pcReducedBaseToggle;
+    Gui::CoinPtr<SoGroup> overlayRoot;
     bool baseHiddenForPreview {false};
 
     PartDesignGui::ViewProvider* getBaseFeatureViewProvider() const;
@@ -130,7 +134,8 @@ private:
         const gp_Dir& y_dir,
         double minProj,
         double initialRadius,
-        double threadPitch
+        double threadPitch,
+        bool reverseNormal
     );
     void handleSeamTriangle(
         std::vector<SbVec3f>& vertices,

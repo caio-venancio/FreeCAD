@@ -122,6 +122,9 @@ public:
 
     /// is called by the framework if the dialog is accepted (Ok)
     bool accept() override;
+
+    /// is called by the framework if the dialog is rejected (Cancel)
+    bool reject() override;
 };
 
 }  // namespace PartDesignGui
