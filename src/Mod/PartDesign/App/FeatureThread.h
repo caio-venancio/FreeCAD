@@ -55,7 +55,6 @@ public:
     App::PropertyLength ThreadDepth;
     App::PropertyLength ThreadDiameter;
     App::PropertyLength Diameter;
-    App::PropertyLength ThreadPitch;
     App::PropertyEnumeration ThreadType;
     App::PropertyEnumeration ThreadTypeName;
     App::PropertyEnumeration ThreadSize;

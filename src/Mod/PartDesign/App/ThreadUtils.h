@@ -41,6 +41,7 @@ public:
         double length,
         const int threadType,
         const int threadSize,
+        const int threadPitch,
         const int leftHanded,
         App::PropertyEnumeration& ThreadClass,
         const bool isInternalThread,
@@ -80,7 +81,7 @@ public:
     std::vector<std::string> getThreadDirectionEnums();
     std::vector<std::string> getThreadDiameters(const int threadType) const;
     std::vector<std::string> getThreadMinorDiameters(const int threadType);
-    double getMinorDiameter(const int threadType, const int size);
+    double getMinorDiameter(const int threadType, const int size, const int pitch) const;
     gp_Pnt getThreadStartPoint(const App::PropertyLinkSub& lateralFace, const gp_Dir& zDir) const;
     gp_Dir getThreadAxisDir(const App::PropertyLinkSub& LateralFace);
     Part::TopoShape reduceExternalThreadBase(
@@ -221,10 +222,41 @@ public:
     double getCylinderDiameter(const TopoDS_Face& face);
     double getLateralFaceDiameter(const App::PropertyLinkSub& lateralFace);
     int findNearestThreadSize(const int threadType, const double size);
-    int findNearestMinorThreadSize(const int threadType, const double diameter);
-    double estimateMinorDiameterFromProfile(const std::string& threadTypeStr, double majorDiameter, double pitch);
+    struct ThreadSizeSelection
+    {
+        int sizeIndex;
+        int pitchIndex;
+        double minorDiameter;
+    };
+    std::optional<ThreadSizeSelection> findNearestMinorThreadSize(
+        const int threadType,
+        const double diameter
+    ) const;
+    double estimateMinorDiameterFromProfile(
+        const std::string& threadTypeStr,
+        double majorDiameter,
+        double pitch
+    ) const;
 
 private:
+    struct ResolvedThreadSelection
+    {
+        const ThreadDefinition* definition;
+        size_t row;
+        double majorDiameter;
+        double pitch;
+    };
+
+    ResolvedThreadSelection resolveThreadSelection(
+        int threadType,
+        int sizeIndex,
+        int pitchIndex
+    ) const;
+    double getMinorDiameterForRow(
+        const ThreadDefinition& definition,
+        size_t row,
+        const std::string& threadTypeStr
+    ) const;
     double getThreadClassClearance(
         int threadType,
         int threadSize,

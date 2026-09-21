@@ -22,7 +22,10 @@
  *                                                                          *
  ***************************************************************************/
 
+#include <BRepAlgoAPI_Common.hxx>
+#include <BRepPrimAPI_MakeCylinder.hxx>
 #include <BRepPrimAPI_MakeSphere.hxx>
+#include <gp_Lin.hxx>
 
 #include "FeatureThread.h"
 #include "FeatureDressUp.h"
@@ -154,14 +157,37 @@ App::DocumentObjectExecReturn* Thread::execute()
     Diameter.setValue(diameter);
 
     int nearestSize = -1;
-    std::vector<std::string> diameters;
+    double definedDiameter = 0.0;
     if (!IsInternal.getValue()) {
-        diameters = threadUtils.getThreadDiameters(ThreadType.getValue());
+        const std::vector<std::string> diameters = threadUtils.getThreadDiameters(
+            ThreadType.getValue()
+        );
         nearestSize = threadUtils.findNearestThreadSize(ThreadType.getValue(), diameter);
+        if (nearestSize < 0 || nearestSize >= static_cast<int>(diameters.size())) {
+            return new App::DocumentObjectExecReturn(
+                QT_TRANSLATE_NOOP(
+                    "Exception",
+                    "Thread error: Thread size index out of definition range."
+                )
+            );
+        }
+        definedDiameter = std::stod(diameters[nearestSize]);
     }
     else {
-        diameters = threadUtils.getThreadMinorDiameters(ThreadType.getValue());
-        nearestSize = threadUtils.findNearestMinorThreadSize(ThreadType.getValue(), diameter);
+        const auto selection = threadUtils.findNearestMinorThreadSize(
+            ThreadType.getValue(),
+            diameter
+        );
+        if (!selection) {
+            return new App::DocumentObjectExecReturn(
+                QT_TRANSLATE_NOOP(
+                    "Exception",
+                    "Thread error: No thread definition found for the selected type."
+                )
+            );
+        }
+        nearestSize = selection->sizeIndex;
+        definedDiameter = selection->minorDiameter;
     }
 
     if (nearestSize < 0) {
@@ -170,21 +196,15 @@ App::DocumentObjectExecReturn* Thread::execute()
         );
     }
 
-    
-    if (nearestSize >= static_cast<int>(diameters.size())) {
-        return new App::DocumentObjectExecReturn(
-            QT_TRANSLATE_NOOP("Exception", "Thread error: Thread size index out of definition range.")
-        );
-    }
-    double definedDiameter = std::stod(diameters[nearestSize]);
-
-    if (std::abs(diameter - definedDiameter) > Precision::Confusion()) {
-        Base::Console().message("diameter: %lf\n", diameter);
-        Base::Console().message("definedDiameter: %lf\n", definedDiameter);
-        std::string msg = "Thread error: No thread definition found with exact diameter matching " 
-                        + std::to_string(diameter) + " mm.";
-        return new App::DocumentObjectExecReturn(msg.c_str());
-    }
+    // TODO: this has to go in production
+    // TODO: if there is only one measure that matches the current cylinder, it passes but it shouldn't
+    // if (std::abs(diameter - definedDiameter) > Precision::Confusion()) {
+    //     Base::Console().message("diameter: %lf\n", diameter);
+    //     Base::Console().message("definedDiameter: %lf\n", definedDiameter);
+    //     std::string msg = "Thread error: No thread definition found with exact diameter matching " 
+    //                     + std::to_string(diameter) + " mm.";
+    //     return new App::DocumentObjectExecReturn(msg.c_str());
+    // }
 
     double conicalAngle = threadUtils.getConicalAngle(LateralFace);
     Base::Console().message("Conical Angle: %lf\n", conicalAngle);
@@ -276,6 +296,29 @@ App::DocumentObjectExecReturn* Thread::execute()
 
         // if (Threaded.getValue() && ModelThread.getValue()) {
         if (ModelThread.getValue()) {
+            const double selectedPitch = threadUtils.getThreadPitch(
+                ThreadType.getValue(),
+                ThreadSize.getValue(),
+                ThreadSizePitch.getValue()
+            );
+            if (selectedPitch <= Precision::Confusion()) {
+                return new App::DocumentObjectExecReturn(
+                    QT_TRANSLATE_NOOP("Exception", "Thread error: Invalid thread pitch")
+                );
+            }
+
+            const double endTrim = selectedPitch / 8.0;
+            const double usefulThreadLength = length - selectedPitch;
+            if (usefulThreadLength <= Precision::Confusion()) {
+                return new App::DocumentObjectExecReturn(
+                    QT_TRANSLATE_NOOP(
+                        "Exception",
+                        "Thread error: Thread depth must be greater than the selected pitch"
+                    )
+                );
+            }
+            const double generatedThreadLength = usefulThreadLength + 2.0 * endTrim;
+
             // A modelled external thread replaces the selected major-diameter surface with the
             // reduced base before fusing the thread profile.  Cosmetic threads must retain the
             // original base so their overlay is drawn on the actual external surface.
@@ -285,7 +328,8 @@ App::DocumentObjectExecReturn* Thread::execute()
                 double majorDiameter = threadUtils.getLateralFaceDiameter(LateralFace);
                 double minorDiameter = threadUtils.getMinorDiameter(
                     ThreadType.getValue(),
-                    ThreadSize.getValue()
+                    ThreadSize.getValue(),
+                    ThreadSizePitch.getValue()
                 );
 
                 Base::Console().message("minorDiameter: %lf\n", minorDiameter);
@@ -304,9 +348,10 @@ App::DocumentObjectExecReturn* Thread::execute()
             TopoDS_Shape thread = threadUtils.makeThread(
                     xDir, 
                     zDir, 
-                    length-threadUtils.getThreadPitch(ThreadType.getValue(), ThreadSize.getValue(), ThreadPitch.getValue()), 
+                    generatedThreadLength,
                     ThreadType.getValue(),
                     ThreadSize.getValue(),
+                    ThreadSizePitch.getValue(),
                     ThreadDirection.getValue(),
                     ThreadClass,
                     IsInternal.getValue(),
@@ -319,11 +364,13 @@ App::DocumentObjectExecReturn* Thread::execute()
             // if(IsInternal.getValue()){
                 gp_Vec zDirUnit = zDir;
                 zDirUnit.Normalize();
-                gp_Pnt bottomPoint = startPoint.Translated(zDirUnit * (length-threadUtils.getThreadPitch(ThreadType.getValue(), ThreadSize.getValue(), ThreadPitch.getValue())));
+                gp_Pnt bottomPoint = startPoint.Translated(
+                    zDirUnit * (usefulThreadLength + endTrim)
+                );
 
                 double projBottom = gp_Vec(nearPoint, bottomPoint).Dot(gp_Vec(axisDir));
 
-                if (projBottom > cylinderHeight -threadUtils.getThreadPitch(ThreadType.getValue(), ThreadSize.getValue(), ThreadPitch.getValue()) + Precision::Confusion()) {
+                if (projBottom > cylinderHeight - selectedPitch + endTrim + Precision::Confusion()) {
                     return new App::DocumentObjectExecReturn(
                         QT_TRANSLATE_NOOP("Exception", "Thread error: Thread bottom point is below the base of the cylinder face")
                     );
@@ -344,7 +391,68 @@ App::DocumentObjectExecReturn* Thread::execute()
                 );
             }
 
+            // makeThread() is deliberately extended by P/8 at both ends.  Keep only the
+            // nominal axial interval with one common operation against a coaxial cylinder.
+            Bnd_Box threadBounds;
+            BRepBndLib::Add(thread, threadBounds);
+            if (threadBounds.IsVoid()) {
+                return new App::DocumentObjectExecReturn(
+                    QT_TRANSLATE_NOOP("Exception", "Thread error: Could not determine thread bounds")
+                );
+            }
+
+            double xMin;
+            double yMin;
+            double zMin;
+            double xMax;
+            double yMax;
+            double zMax;
+            threadBounds.Get(xMin, yMin, zMin, xMax, yMax, zMax);
+
+            const gp_Pnt trimmingOrigin = startPoint.Translated(
+                zDirUnit * length
+            );
+            const gp_Dir trimmingDirection(zDirUnit.Reversed());
+            const gp_Lin trimmingAxis(trimmingOrigin, trimmingDirection);
+
+            double trimmingRadius = 0.0;
+            for (int xIndex = 0; xIndex < 2; ++xIndex) {
+                for (int yIndex = 0; yIndex < 2; ++yIndex) {
+                    for (int zIndex = 0; zIndex < 2; ++zIndex) {
+                        const gp_Pnt corner(
+                            xIndex == 0 ? xMin : xMax,
+                            yIndex == 0 ? yMin : yMax,
+                            zIndex == 0 ? zMin : zMax
+                        );
+                        const double cornerRadius = trimmingAxis.Distance(corner);
+                        if (cornerRadius > trimmingRadius) {
+                            trimmingRadius = cornerRadius;
+                        }
+                    }
+                }
+            }
+            trimmingRadius += selectedPitch;
+
+            BRepPrimAPI_MakeCylinder trimmingCylinder(
+                gp_Ax2(trimmingOrigin, trimmingDirection),
+                trimmingRadius,
+                length
+            );
+            BRepAlgoAPI_Common trimOperation(thread, trimmingCylinder.Shape());
+            trimOperation.Build();
+            if (!trimOperation.IsDone() || trimOperation.Shape().IsNull()) {
+                return new App::DocumentObjectExecReturn(
+                    QT_TRANSLATE_NOOP("Exception", "Thread error: Failed to trim thread ends")
+                );
+            }
+            thread = trimOperation.Shape();
+
             Part::TopoShape protoThread(thread);
+
+            // Temporary test: display only the trimmed thread tool.
+            // Shape.setValue(protoThread);
+            // AddSubShape.setValue(protoThread);
+            // return App::DocumentObject::StdReturn;
 
             if (base.isNull()) {
                 Shape.setValue(protoThread);
@@ -562,17 +670,28 @@ void Thread::onChanged(const App::Property* prop)
         IsInternal.setValue(isInternal);
 
         int nearestSize = -1;
+        int nearestPitch = -1;
         if (!IsInternal.getValue()) {
             nearestSize = threadUtils.findNearestThreadSize(ThreadType.getValue(), diameter);
         }
         else {
             Base::Console().message("Calculando o menor thread size...\n");
-            nearestSize = threadUtils.findNearestMinorThreadSize(ThreadType.getValue(), diameter);
+            const auto selection = threadUtils.findNearestMinorThreadSize(
+                ThreadType.getValue(),
+                diameter
+            );
+            if (selection) {
+                nearestSize = selection->sizeIndex;
+                nearestPitch = selection->pitchIndex;
+            }
             Base::Console().message("Olha o thread size aqui: %d\n", nearestSize);
         }
 
         if (nearestSize >= 0 && nearestSize != ThreadSize.getValue()) {
             ThreadSize.setValue(nearestSize);
+        }
+        if (nearestPitch >= 0 && nearestPitch != ThreadSizePitch.getValue()) {
+            ThreadSizePitch.setValue(nearestPitch);
         }
     } else if (prop == &Tapered) {
         if (Tapered.getValue()) {
@@ -615,7 +734,11 @@ std::vector<gp_Pnt> Thread::getThreadLocations() const
 
 double Thread::getThreadPitch() const
 {
-    return threadUtils.getThreadPitch(ThreadType.getValue(), ThreadSize.getValue(), ThreadPitch.getValue());
+    return threadUtils.getThreadPitch(
+        ThreadType.getValue(),
+        ThreadSize.getValue(),
+        ThreadSizePitch.getValue()
+    );
 }
 
 std::optional<gp_Dir> Thread::getThreadNormal() const

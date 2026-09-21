@@ -60,6 +60,7 @@
 #include "Feature.h"
 
 #include <numbers>
+#include <limits>
 #include <iostream>
 
 #include "ThreadUtils.h"
@@ -67,6 +68,13 @@
 using namespace PartDesign;
 
 bool DEBUG = true;
+
+namespace
+{
+constexpr double threadDefinitionTolerance = 0.001;
+// The fallback cylinder must overlap the generated thread instead of merely touching it.
+constexpr double minorDiameterFuseOverlap = 0.01;
+}
 
 /* "None" profile */
 const char* ThreadUtils::ThreadClass_None_Enums[] = {"None", nullptr};
@@ -633,7 +641,7 @@ std::vector<std::string> ThreadUtils::getThreadMinorDiameters(const int threadTy
 double ThreadUtils::estimateMinorDiameterFromProfile(
     const std::string& threadTypeStr,
     double majorDiameter,
-    double pitch)
+    double pitch) const
 {
     double Rmaj = majorDiameter / 2.0;
     double rootRadius;
@@ -644,7 +652,8 @@ double ThreadUtils::estimateMinorDiameterFromProfile(
     }
     else {
         double H = std::sqrt(3.0) / 2.0 * pitch;
-        double h = 7.0 * H / 8.0;
+        // double h = 7.0 * H / 8.0;
+        double h = 5.0 * H / 8.0;
         rootRadius = Rmaj - h;
     }
 
@@ -655,66 +664,100 @@ double ThreadUtils::estimateMinorDiameterFromProfile(
     return 2.0 * rootRadius;
 }
 
-// TODO: return with threadclass in account
-// double ThreadUtils::getMinorDiameter(const int threadType, const int size)  // const int threadclass)
-// {
-//     std::vector<std::string> currentThreads = ThreadUtils::getThreadTypeNameEnums();
-//     std::string currentThread = currentThreads[threadType];
-//     int currentThreadTypeIndex = threadTypeFromString(currentThread);
-
-//     std::vector<std::string> minorDiameters;
-//     const auto& definitions = getThreadDefinitions();
-//     for (const auto& definition : definitions) {
-//         if (definition.name == currentThread) {
-//             minorDiameters = definition.minorDiameters;
-//             break;
-//         }
-//     }
-//     if (minorDiameters.empty()) {
-//         return 0.0;
-//     }
-
-//     // TODO: protect this against invalid access
-//     return std::abs(std::stod(minorDiameters[size]));
-// }
-
-double ThreadUtils::getMinorDiameter(const int threadType, const int size)
+ThreadUtils::ResolvedThreadSelection ThreadUtils::resolveThreadSelection(
+    int threadType,
+    int sizeIndex,
+    int pitchIndex
+) const
 {
-    std::vector<std::string> currentThreads = ThreadUtils::getThreadTypeNameEnums();
-    std::string currentThread = currentThreads[threadType];
-    int currentThreadTypeIndex = threadTypeFromString(currentThread);
+    const std::vector<std::string> currentThreads = getThreadTypeNameEnums();
+    if (threadType < 0 || static_cast<size_t>(threadType) >= currentThreads.size()) {
+        throw Base::IndexError(QT_TRANSLATE_NOOP("Exception", "Thread type out of range"));
+    }
 
-    std::vector<std::string> minorDiameters, sizes, pitches;
-    const auto& definitions = getThreadDefinitions();
-    for (const auto& definition : definitions) {
-        if (definition.name == currentThread) {
-            minorDiameters = definition.minorDiameters;
-            sizes = definition.sizes;
-            pitches = definition.pitches;
-            break;
+    const std::vector<std::string> diameters = getThreadDiameters(threadType);
+    if (sizeIndex < 0 || static_cast<size_t>(sizeIndex) >= diameters.size()) {
+        throw Base::IndexError(QT_TRANSLATE_NOOP("Exception", "Thread size out of range"));
+    }
+
+    const std::vector<std::string> pitches = getThreadPitches(threadType, sizeIndex);
+    if (pitchIndex < 0 || static_cast<size_t>(pitchIndex) >= pitches.size()) {
+        throw Base::IndexError(QT_TRANSLATE_NOOP("Exception", "Thread pitch out of range"));
+    }
+
+    const double selectedDiameter = std::stod(diameters[sizeIndex]);
+    const double selectedPitch = std::stod(pitches[pitchIndex]);
+    const std::string& currentThread = currentThreads[threadType];
+
+    for (const auto& definition : getThreadDefinitions()) {
+        if (definition.name != currentThread) {
+            continue;
+        }
+
+        const size_t rowCount = std::min(definition.sizes.size(), definition.pitches.size());
+        for (size_t row = 0; row < rowCount; ++row) {
+            if (definition.sizes[row].empty() || definition.pitches[row].empty()) {
+                continue;
+            }
+
+            const double rowDiameter = std::stod(definition.sizes[row]);
+            const double rowPitch = std::stod(definition.pitches[row]);
+            if (std::abs(rowDiameter - selectedDiameter) < threadDefinitionTolerance
+                && std::abs(rowPitch - selectedPitch) < threadDefinitionTolerance) {
+                return {&definition, row, selectedDiameter, selectedPitch};
+            }
+        }
+
+        break;
+    }
+
+    throw Base::ValueError(
+        QT_TRANSLATE_NOOP("Exception", "Selected thread size and pitch were not found")
+    );
+}
+
+double ThreadUtils::getMinorDiameterForRow(
+    const ThreadDefinition& definition,
+    size_t row,
+    const std::string& threadTypeStr
+) const
+{
+    if (row >= definition.sizes.size() || row >= definition.pitches.size()) {
+        throw Base::IndexError(QT_TRANSLATE_NOOP("Exception", "Thread definition row out of range"));
+    }
+
+    if (row < definition.minorDiameters.size() && !definition.minorDiameters[row].empty()) {
+        try {
+            const double value = std::abs(std::stod(definition.minorDiameters[row]));
+            if (value > Precision::Confusion()) {
+                return value;
+            }
+        }
+        catch (const std::exception&) {
+            // Invalid or absent values use the profile-based fallback below.
         }
     }
 
-    bool hasValue = static_cast<size_t>(size) < minorDiameters.size()
-        && !minorDiameters[size].empty();
+    const double majorDiameter = std::stod(definition.sizes[row]);
+    const double pitch = std::stod(definition.pitches[row]);
+    return estimateMinorDiameterFromProfile(threadTypeStr, majorDiameter, pitch)
+        + minorDiameterFuseOverlap;
+}
 
-    if (hasValue) {
-        double value = std::abs(std::stod(minorDiameters[size]));
-        if (value > Precision::Confusion()) {
-            return value;
-        }
-    }
-
-    if (static_cast<size_t>(size) < sizes.size()
-        && static_cast<size_t>(size) < pitches.size()) {
-        double majorDiameter = std::stod(sizes[size]);
-        double pitch = std::stod(pitches[size]);
-        std::string threadTypeStr = ThreadTypeEnums[currentThreadTypeIndex];
-        //TODO: fix boolean operation so that 0.01 is not needed
-        return estimateMinorDiameterFromProfile(threadTypeStr, majorDiameter, pitch) + 0.01;
-    }
-
-    return 0.0;
+double ThreadUtils::getMinorDiameter(
+    const int threadType,
+    const int size,
+    const int pitch
+) const
+{
+    const ResolvedThreadSelection selection = resolveThreadSelection(threadType, size, pitch);
+    const std::vector<std::string> currentThreads = getThreadTypeNameEnums();
+    const int threadTypeIndex = threadTypeFromString(currentThreads[threadType]);
+    return getMinorDiameterForRow(
+        *selection.definition,
+        selection.row,
+        ThreadTypeEnums[threadTypeIndex]
+    );
 }
 
 std::vector<std::string> ThreadUtils::getThreadPitches(const int threadType, const int threadDiameter) const
@@ -774,7 +817,7 @@ double ThreadUtils::getThreadPitch(const int threadType, const int threadDiamete
     if (pitches.empty()){
         return 0.0;
     }
-    if (threadPitch > pitches.size()){
+    if (threadPitch < 0 || static_cast<size_t>(threadPitch) >= pitches.size()){
         return 0.0;
     }
 
@@ -831,59 +874,17 @@ std::string ThreadUtils::getThreadDesignations(
     const int threadPitch
 )
 {
-    std::vector<std::string> currentThreads = ThreadUtils::getThreadTypeNameEnums();
-    std::string currentThread = currentThreads[threadType];
-    int currentThreadTypeIndex = threadTypeFromString(currentThread);
-
-
-    std::vector<std::string> diameters = getThreadDiameters(threadType);
-    std::string targetDiameter = diameters[threadDiameter];
-    double targeDiameterDouble = std::stod(targetDiameter);
-
-    std::vector<std::string> pitches = ThreadUtils::getThreadPitches(threadType, threadDiameter);
-    std::string targetPitch = pitches[threadPitch];
-
-    double targetPitchDouble = std::stod(targetPitch);
-
-    std::vector<std::string> pitchesDefinitions;
-    std::vector<std::string> sizes;  // diameters
-    std::vector<std::string> designations;
-    const auto& definitions = getThreadDefinitions();
-    for (const auto& definition : definitions) {
-        if (definition.name == currentThread) {
-            sizes = definition.sizes;
-            pitchesDefinitions = definition.pitches;
-            designations = definition.designations;
-            break;
+    try {
+        const ResolvedThreadSelection selection = resolveThreadSelection(
+            threadType,
+            threadDiameter,
+            threadPitch
+        );
+        if (selection.row < selection.definition->designations.size()) {
+            return selection.definition->designations[selection.row];
         }
     }
-    if (sizes.empty()) {
-        return "---";
-    }
-    if (pitchesDefinitions.empty()) {
-        return "---";
-    }
-    if (designations.empty()) {
-        return "---";
-    }
-
-    // for (const auto& thread : ThreadUtils::threadDescription[currentThreadTypeIndex]) {
-    //     if (std::abs(thread.diameter - targeDiameterDouble) < 0.001) {
-    //         if (std::abs(thread.pitch - targetPitchDouble) < 0.001) {
-    //             return thread.designation;
-    //         }
-    //     }
-    // }
-
-    // TODO: change the manual index
-    size_t index = 0;
-    for (const auto& size : sizes) {
-        if (std::abs(std::stod(size) - targeDiameterDouble) < 0.001) {
-            if (std::abs(std::stod(pitchesDefinitions[index]) - targetPitchDouble) < 0.001) {
-                return designations[index];
-            }
-        }
-        ++index;
+    catch (const Base::Exception&) {
     }
 
     return "---";
@@ -1001,6 +1002,7 @@ TopoDS_Shape ThreadUtils::makeThread(
     // const App::PropertyEnumeration& ThreadSize
     const int threadType,  // TODO: change to ThreadTypeIndex
     const int threadSize,  // TODO: change to ThreadDiameterIndex
+    const int threadPitch,
     const int leftHanded,
     App::PropertyEnumeration& ThreadClass,
     const bool isInternalThread,
@@ -1020,6 +1022,9 @@ TopoDS_Shape ThreadUtils::makeThread(
     if (threadSize < 0) {
         throw Base::IndexError(QT_TRANSLATE_NOOP("Exception", "Thread size out of range"));
     }
+    if (threadPitch < 0) {
+        throw Base::IndexError(QT_TRANSLATE_NOOP("Exception", "Thread pitch out of range"));
+    }
 
     // if (xDir.Magnitude() <= Precision::Confusion()) {
     // throw Base::ValueError("Invalid xDir");
@@ -1037,11 +1042,27 @@ TopoDS_Shape ThreadUtils::makeThread(
     // https://en.wikipedia.org/wiki/File:ISO_and_UTS_Thread_Dimensions.svg
     // Rmaj is half of the major diameter
     std::vector<std::string> currentThreads = ThreadUtils::getThreadTypeNameEnums();
+    if (static_cast<size_t>(threadType) >= currentThreads.size()) {
+        throw Base::IndexError(QT_TRANSLATE_NOOP("Exception", "Thread type out of range"));
+    }
+
+    std::vector<std::string> threadDiameters = getThreadDiameters(threadType);
+    if (static_cast<size_t>(threadSize) >= threadDiameters.size()) {
+        throw Base::IndexError(QT_TRANSLATE_NOOP("Exception", "Thread size out of range"));
+    }
+
+    std::vector<std::string> threadPitches = getThreadPitches(threadType, threadSize);
+    if (static_cast<size_t>(threadPitch) >= threadPitches.size()) {
+        throw Base::IndexError(QT_TRANSLATE_NOOP("Exception", "Thread pitch out of range"));
+    }
+
     std::string currentThread = currentThreads[threadType];
     int currentThreadTypeIndex = threadTypeFromString(currentThread);
-    double Rmaj = threadDescription[currentThreadTypeIndex][threadSize].diameter / 2;
-    // double Pitch = getThreadPitch();
-    double Pitch = threadDescription[currentThreadTypeIndex][threadSize].pitch;
+    double Rmaj = std::stod(threadDiameters[threadSize]) / 2.0;
+    double Pitch = getThreadPitch(threadType, threadSize, threadPitch);
+    if (Pitch <= Precision::Confusion()) {
+        throw Base::ValueError(QT_TRANSLATE_NOOP("Exception", "Thread pitch must be greater than zero"));
+    }
 
     double clearance;  // clearance to be added or subtracted on the diameter
     if (UseCustomThreadClearance) {
@@ -1057,6 +1078,7 @@ TopoDS_Shape ThreadUtils::makeThread(
     } else {
         RmajC = Rmaj - clearance;
     }
+    Base::Console().message("[makeThread]: RmajC: %lf\n", RmajC);
     double marginZ = 0.001;
 
     if (DEBUG) Base::Console().message("[makeThread]: Starting thread geometry construction...\n");
@@ -1137,17 +1159,17 @@ TopoDS_Shape ThreadUtils::makeThread(
         // Base::Console().message("  p3 -> X: %.6f, Y: %.6f, Z: %.6f\n", p3.X(), p3.Y(), p3.Z());
         // Base::Console().message("  p4 -> X: %.6f, Y: %.6f, Z: %.6f\n", p4.X(), p4.Y(), p4.Z());
 
-        // double d_p1_p2 = p1.Distance(p2);
-        // double d_p2_p3 = p2.Distance(p3);
-        // double d_p3_p4 = p3.Distance(p4);
-        // double d_p4_p1 = p4.Distance(p1);
+        double d_p1_p2 = p1.Distance(p2);
+        double d_p2_p3 = p2.Distance(p3);
+        double d_p3_p4 = p3.Distance(p4);
+        double d_p4_p1 = p4.Distance(p1);
 
         // if (DEBUG) {
-        // Base::Console().message("[makeThread DEBUG]: Profile Edges Distances:\n");
-        // Base::Console().message("  p1 -> p2: %.6f mm\n", d_p1_p2);
-        // Base::Console().message("  p2 -> p3: %.6f mm\n", d_p2_p3);
-        // Base::Console().message("  p3 -> p4: %.6f mm\n", d_p3_p4);
-        // Base::Console().message("  p4 -> p1: %.6f mm\n", d_p4_p1);
+        Base::Console().message("[makeThread DEBUG]: Profile Edges Distances:\n");
+        Base::Console().message("  p1 -> p2: %.6f mm\n", d_p1_p2);
+        Base::Console().message("  p2 -> p3: %.6f mm\n", d_p2_p3);
+        Base::Console().message("  p3 -> p4: %.6f mm\n", d_p3_p4);
+        Base::Console().message("  p4 -> p1: %.6f mm\n", d_p4_p1);
         // }
 
         if (DEBUG) Base::Console().message("[makeThread]: Adding initial edge (p1 -> p2) to wire...\n");
@@ -1409,33 +1431,77 @@ int ThreadUtils::findNearestThreadSize(const int threadType, const double diamet
 
     return bestIndex;
 }
-int ThreadUtils::findNearestMinorThreadSize(const int threadType, const double diameter)
+std::optional<ThreadUtils::ThreadSizeSelection> ThreadUtils::findNearestMinorThreadSize(
+    const int threadType,
+    const double diameter
+) const
 {
-    std::vector<std::string> threadDiameters = getThreadMinorDiameters(threadType);
-
-    if (threadDiameters.empty()) {
-        return -1;
+    const std::vector<std::string> currentThreads = getThreadTypeNameEnums();
+    if (threadType < 0 || static_cast<size_t>(threadType) >= currentThreads.size()) {
+        return std::nullopt;
     }
 
-    int bestIndex = 0;
-    double bestDistance = std::abs(std::stod(threadDiameters[0]) - diameter);
+    const std::string& currentThread = currentThreads[threadType];
+    const int threadTypeIndex = threadTypeFromString(currentThread);
+    const std::string threadTypeStr = ThreadTypeEnums[threadTypeIndex];
+    const std::vector<std::string> diameters = getThreadDiameters(threadType);
+    std::optional<ThreadSizeSelection> bestSelection;
+    double bestDistance = std::numeric_limits<double>::max();
 
-    for (size_t i = 1; i < threadDiameters.size(); ++i) {
-        double currentDiameter = std::stod(threadDiameters[i]);
-        double distance = std::abs(currentDiameter - diameter);
-
-        // if (DEBUG) Base::Console().message("i=%d\n", i);
-        // if (DEBUG) Base::Console().message("value=%s\n", threadDiameters[i]);
-        // if (DEBUG) Base::Console().message("distance=%lf\n", distance);
-        // if (DEBUG) Base::Console().message("bestDistance=%lf\n", bestDistance);
-
-        if (distance < bestDistance) {
-            bestDistance = distance;
-            bestIndex = static_cast<int>(i);
+    for (const auto& definition : getThreadDefinitions()) {
+        if (definition.name != currentThread) {
+            continue;
         }
+
+        const size_t rowCount = std::min(definition.sizes.size(), definition.pitches.size());
+        for (size_t row = 0; row < rowCount; ++row) {
+            if (definition.sizes[row].empty() || definition.pitches[row].empty()) {
+                continue;
+            }
+
+            const double majorDiameter = std::stod(definition.sizes[row]);
+            const double rowPitch = std::stod(definition.pitches[row]);
+
+            int sizeIndex = -1;
+            for (size_t i = 0; i < diameters.size(); ++i) {
+                if (std::abs(std::stod(diameters[i]) - majorDiameter)
+                    < threadDefinitionTolerance) {
+                    sizeIndex = static_cast<int>(i);
+                    break;
+                }
+            }
+            if (sizeIndex < 0) {
+                continue;
+            }
+
+            const std::vector<std::string> pitches = getThreadPitches(threadType, sizeIndex);
+            int pitchIndex = -1;
+            for (size_t i = 0; i < pitches.size(); ++i) {
+                if (std::abs(std::stod(pitches[i]) - rowPitch) < threadDefinitionTolerance) {
+                    pitchIndex = static_cast<int>(i);
+                    break;
+                }
+            }
+            if (pitchIndex < 0) {
+                continue;
+            }
+
+            const double minorDiameter = getMinorDiameterForRow(
+                definition,
+                row,
+                threadTypeStr
+            );
+            const double distance = std::abs(minorDiameter - diameter);
+            if (distance < bestDistance) {
+                bestDistance = distance;
+                bestSelection = ThreadSizeSelection {sizeIndex, pitchIndex, minorDiameter};
+            }
+        }
+
+        break;
     }
 
-    return bestIndex;
+    return bestSelection;
 }
 
 bool ThreadUtils::isInternalFace(const App::PropertyLinkSub& faceProp, const TopoDS_Shape& solid)
@@ -2066,6 +2132,14 @@ Part::TopoShape ThreadUtils::reduceExternalThreadBase(
     double length
 )
 {
+    if (majorDiameter <= Precision::Confusion()
+        || minorDiameter <= Precision::Confusion()
+        || minorDiameter >= majorDiameter) {
+        throw Base::ValueError(
+            QT_TRANSLATE_NOOP("Exception", "Invalid major or minor thread diameter")
+        );
+    }
+
     if (DEBUG) {
         Base::Console().message("[reduceExternalThreadBase]: Starting external thread base reduction...\n");
         Base::Console().message("[reduceExternalThreadBase]: Inputs -> majorDiameter: %.4f, minorDiameter: %.4f, length: %.4f\n",
