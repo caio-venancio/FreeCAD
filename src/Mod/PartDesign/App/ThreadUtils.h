@@ -26,13 +26,16 @@
 
 #include <BRepAdaptor_Curve.hxx>
 
+#include <Mod/Part/App/TopoShape.h>
+#include <Mod/PartDesign/PartDesignGlobal.h>
+
 namespace PartDesign
 {
 
 static constexpr size_t ThreadClass_ISOmetric_data_size_utils = 25;
 static constexpr size_t ThreadRunout_size_utils = 24;
 
-class ThreadUtils
+class PartDesignExport ThreadUtils
 {
 public:
     TopoDS_Shape makeThread(
@@ -169,6 +172,22 @@ public:
 
     struct ThreadDefinition
     {
+        enum class ProfileStatus
+        {
+            Missing,
+            Valid,
+            Invalid
+        };
+
+        struct Profile
+        {
+            Part::TopoShape wire;
+            double minX;
+            double maxX;
+            double minY;
+            double maxY;
+        };
+
         std::string id;
         std::string name;
         std::string description;
@@ -185,15 +204,27 @@ public:
         std::vector<std::string> tapDrills;
         std::vector<std::string> internalClearances;
         std::vector<std::string> externalClearances;
+        std::optional<Profile> profile;
+        std::optional<Profile> externalProfile;
+        ProfileStatus profileStatus;
+        ProfileStatus externalProfileStatus;
+        std::string profileDiagnostic;
+        std::string externalProfileDiagnostic;
 
         ThreadDefinition()
-            : depthType(0)
+            : isConical(false)
+            , depthType(0)
+            , profileStatus(ProfileStatus::Missing)
+            , externalProfileStatus(ProfileStatus::Missing)
         {}
 
         ThreadDefinition(const std::string& n, const std::string& desc)
             : name(n)
             , description(desc)
+            , isConical(false)
             , depthType(0)
+            , profileStatus(ProfileStatus::Missing)
+            , externalProfileStatus(ProfileStatus::Missing)
         {}
 
         ThreadDefinition(
@@ -205,11 +236,19 @@ public:
             : name(n)
             , description(desc)
             , threadType(type)
+            , isConical(false)
             , depthType(depth)
+            , profileStatus(ProfileStatus::Missing)
+            , externalProfileStatus(ProfileStatus::Missing)
         {}
     };
 
     static std::optional<ThreadDefinition> findMetadata(App::Document* doc);
+    static void findThreadProfiles(
+        App::Document* doc,
+        ThreadDefinition& definition,
+        const std::string& source = "<document>"
+    );
 
     std::vector<std::string> getThreadTypeEnums();
     std::vector<std::string> getThreadTypeNameEnums() const;
@@ -281,7 +320,10 @@ private:
     private:
         std::vector<ThreadDefinition> definitions;
         std::optional<ThreadDefinition> readThreadDefinition(const Base::FileInfo& file);
-        std::optional<ThreadDefinition> readThreadDocument(App::Document* doc);
+        std::optional<ThreadDefinition> readThreadDocument(
+            App::Document* doc,
+            const std::string& source
+        );
         void findSpreadsheets(App::Document* doc, ThreadDefinition& definition);
     };
 

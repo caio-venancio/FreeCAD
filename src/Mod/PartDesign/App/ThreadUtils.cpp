@@ -39,6 +39,8 @@
 #include <TopoDS_Wire.hxx>
 #include <BRepBuilderAPI_MakeWire.hxx>
 #include <BRepBuilderAPI_MakeEdge.hxx>
+#include <BRepBuilderAPI_Copy.hxx>
+#include <BRepTools_WireExplorer.hxx>
 #include <GC_MakeArcOfCircle.hxx>
 #include <BRepBuilderAPI_MakeSolid.hxx>
 #include <BRepClass3d_SolidClassifier.hxx>
@@ -52,6 +54,7 @@
 #include <App/DocumentObject.h>
 #include "App/Document.h"
 #include <Mod/Part/App/TopoShape.h>
+#include <Mod/Part/App/Part2DObject.h>
 #include <Mod/Part/App/FaceMakerCheese.h>
 #include <Mod/Part/App/Tools.h>
 #include <Base/Tools.h>
@@ -1822,7 +1825,7 @@ std::optional<ThreadUtils::ThreadDefinition> ThreadUtils::ThreadLibrary::readThr
     // if (DEBUG) Base::Console().message("After open: %s\n", currentDoc ? currentDoc->getName() : "<none>");
 
     try {
-        auto definition = readThreadDocument(doc);
+        auto definition = readThreadDocument(doc, file.filePath());
 
         // if (DEBUG) Base::Console().message("Closing a thread file!\n");
         App::GetApplication().closeDocument(doc->getName());
@@ -1852,7 +1855,8 @@ std::optional<ThreadUtils::ThreadDefinition> ThreadUtils::ThreadLibrary::readThr
 }
 
 std::optional<ThreadUtils::ThreadDefinition> ThreadUtils::ThreadLibrary::readThreadDocument(
-    App::Document* doc
+    App::Document* doc,
+    const std::string& source
 )
 {
     // if (DEBUG) Base::Console().message("Handling data!\n");
@@ -1868,7 +1872,7 @@ std::optional<ThreadUtils::ThreadDefinition> ThreadUtils::ThreadLibrary::readThr
 
     ThreadDefinition definition = *metadata;
 
-    // localizar sketches
+    ThreadUtils::findThreadProfiles(doc, definition, source);
 
     // localizar spreadsheets
     findSpreadsheets(doc, definition);
@@ -1876,6 +1880,209 @@ std::optional<ThreadUtils::ThreadDefinition> ThreadUtils::ThreadLibrary::readThr
     // registrar ThreadDefinition
 
     return definition;
+}
+
+namespace
+{
+
+double getSignedProfileArea(const TopoDS_Wire& wire)
+{
+    constexpr int samplesPerEdge = 32;
+    std::vector<gp_Pnt> points;
+
+    for (BRepTools_WireExplorer explorer(wire); explorer.More(); explorer.Next()) {
+        TopoDS_Edge edge = TopoDS::Edge(explorer.Current());
+        BRepAdaptor_Curve curve(edge);
+        const double first = curve.FirstParameter();
+        const double last = curve.LastParameter();
+        const bool reversed = edge.Orientation() == TopAbs_REVERSED;
+
+        for (int i = 0; i < samplesPerEdge; ++i) {
+            const double ratio = static_cast<double>(i) / samplesPerEdge;
+            const double parameter = reversed ? last - ratio * (last - first)
+                                              : first + ratio * (last - first);
+            points.push_back(curve.Value(parameter));
+        }
+    }
+
+    if (points.size() < 3) {
+        return 0.0;
+    }
+
+    double twiceArea = 0.0;
+    for (size_t i = 0; i < points.size(); ++i) {
+        const gp_Pnt& current = points[i];
+        const gp_Pnt& next = points[(i + 1) % points.size()];
+        twiceArea += current.X() * next.Y() - next.X() * current.Y();
+    }
+    return twiceArea / 2.0;
+}
+
+std::optional<ThreadUtils::ThreadDefinition::Profile> readThreadProfile(
+    App::Document* doc,
+    const char* objectName,
+    ThreadUtils::ThreadDefinition::ProfileStatus& status,
+    std::string& diagnostic
+)
+{
+    using Profile = ThreadUtils::ThreadDefinition::Profile;
+    using ProfileStatus = ThreadUtils::ThreadDefinition::ProfileStatus;
+
+    status = ProfileStatus::Missing;
+    diagnostic.clear();
+
+    auto* object = doc->getObject(objectName);
+    if (!object) {
+        diagnostic = std::string("Object '") + objectName + "' was not found";
+        return std::nullopt;
+    }
+
+    auto* sketch = dynamic_cast<Part::Part2DObject*>(object);
+    if (!sketch) {
+        status = ProfileStatus::Invalid;
+        diagnostic = std::string("Object '") + objectName + "' is not a 2D sketch object";
+        return std::nullopt;
+    }
+
+    if (sketch->isError()) {
+        status = ProfileStatus::Invalid;
+        diagnostic = std::string("Object '") + objectName + "' failed to recompute";
+        return std::nullopt;
+    }
+
+    if (!sketch->Placement.getValue().isIdentity(Precision::Confusion())) {
+        status = ProfileStatus::Invalid;
+        diagnostic = std::string("Object '") + objectName + "' must be placed on the XY plane";
+        return std::nullopt;
+    }
+
+    Part::TopoShape shape = sketch->Shape.getShape();
+    if (shape.isNull()) {
+        status = ProfileStatus::Invalid;
+        diagnostic = std::string("Object '") + objectName + "' has no profile geometry";
+        return std::nullopt;
+    }
+
+    if (shape.shapeType() != TopAbs_WIRE) {
+        status = ProfileStatus::Invalid;
+        diagnostic = std::string("Object '") + objectName
+            + "' must contain exactly one connected wire without loose geometry";
+        return std::nullopt;
+    }
+
+    if (!shape.isValid()) {
+        status = ProfileStatus::Invalid;
+        diagnostic = std::string("Object '") + objectName + "' contains invalid geometry";
+        return std::nullopt;
+    }
+
+    if (!shape.isClosed()) {
+        status = ProfileStatus::Invalid;
+        diagnostic = std::string("Object '") + objectName + "' must be a closed wire";
+        return std::nullopt;
+    }
+
+    const Base::BoundBox3d bounds = shape.getBoundBox();
+    const double tolerance = Precision::Confusion();
+    if (bounds.MinZ < -tolerance || bounds.MaxZ > tolerance) {
+        status = ProfileStatus::Invalid;
+        diagnostic = std::string("Object '") + objectName + "' must be planar in XY";
+        return std::nullopt;
+    }
+
+    if (bounds.MinY < -tolerance || bounds.MaxY > 1.0 + tolerance) {
+        status = ProfileStatus::Invalid;
+        diagnostic = std::string("Object '") + objectName
+            + "' must use normalized axial coordinates in the range 0..1";
+        return std::nullopt;
+    }
+
+    if (bounds.LengthX() <= tolerance || bounds.LengthY() <= tolerance) {
+        status = ProfileStatus::Invalid;
+        diagnostic = std::string("Object '") + objectName + "' has a degenerate profile";
+        return std::nullopt;
+    }
+
+    const TopoDS_Wire wire = TopoDS::Wire(shape.getShape());
+    if (getSignedProfileArea(wire) <= tolerance * tolerance) {
+        status = ProfileStatus::Invalid;
+        diagnostic = std::string("Object '") + objectName
+            + "' must be oriented counter-clockwise in the XY plane";
+        return std::nullopt;
+    }
+
+    BRepBuilderAPI_Copy copy(wire, Standard_True, Standard_False);
+    if (!copy.IsDone() || copy.Shape().IsNull()) {
+        status = ProfileStatus::Invalid;
+        diagnostic = std::string("Object '") + objectName + "' could not be copied";
+        return std::nullopt;
+    }
+
+    Profile profile {
+        Part::TopoShape(copy.Shape()),
+        bounds.MinX,
+        bounds.MaxX,
+        bounds.MinY,
+        bounds.MaxY
+    };
+    status = ProfileStatus::Valid;
+    return profile;
+}
+
+}  // namespace
+
+void ThreadUtils::findThreadProfiles(
+    App::Document* doc,
+    ThreadDefinition& definition,
+    const std::string& source
+)
+{
+    if (!doc) {
+        definition.profileStatus = ThreadDefinition::ProfileStatus::Invalid;
+        definition.profileDiagnostic = "Document is null";
+        Base::Console().warning(
+            "Thread definition '%s': %s. Using the legacy profile.\n",
+            source.c_str(),
+            definition.profileDiagnostic.c_str()
+        );
+        return;
+    }
+
+    doc->recompute();
+
+    definition.profile = readThreadProfile(
+        doc,
+        "ThreadProfile",
+        definition.profileStatus,
+        definition.profileDiagnostic
+    );
+    if (definition.profileStatus != ThreadDefinition::ProfileStatus::Valid) {
+        Base::Console().warning(
+            "Thread definition '%s': %s. Using the legacy profile.\n",
+            source.c_str(),
+            definition.profileDiagnostic.c_str()
+        );
+    }
+    else {
+        definition.sketches.emplace_back("ThreadProfile");
+    }
+
+    definition.externalProfile = readThreadProfile(
+        doc,
+        "ExternalThreadProfile",
+        definition.externalProfileStatus,
+        definition.externalProfileDiagnostic
+    );
+    if (definition.externalProfileStatus == ThreadDefinition::ProfileStatus::Invalid) {
+        Base::Console().warning(
+            "Thread definition '%s': %s. The common profile will be used for external threads.\n",
+            source.c_str(),
+            definition.externalProfileDiagnostic.c_str()
+        );
+    }
+    else if (definition.externalProfileStatus == ThreadDefinition::ProfileStatus::Valid) {
+        definition.sketches.emplace_back("ExternalThreadProfile");
+    }
 }
 
 
