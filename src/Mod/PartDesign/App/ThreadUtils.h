@@ -278,6 +278,18 @@ public:
     ) const;
 
 private:
+    enum class ThreadProfileSource
+    {
+        Common,
+        External
+    };
+
+    struct PreparedThreadProfile
+    {
+        Part::TopoShape wire;
+        ThreadProfileSource source;
+    };
+
     struct ResolvedThreadSelection
     {
         const ThreadDefinition* definition;
@@ -290,6 +302,22 @@ private:
         int threadType,
         int sizeIndex,
         int pitchIndex
+    ) const;
+    std::optional<PreparedThreadProfile> prepareThreadProfile(
+        int threadType,
+        int sizeIndex,
+        int pitchIndex,
+        bool isInternalThread,
+        double majorRadius,
+        const gp_Vec& xDir,
+        const gp_Vec& zDir
+    ) const;
+    Part::TopoShape makeLegacyThreadProfile(
+        const std::string& threadType,
+        double majorRadius,
+        double pitch,
+        const gp_Vec& xDir,
+        const gp_Vec& zDir
     ) const;
     double getMinorDiameterForRow(
         const ThreadDefinition& definition,

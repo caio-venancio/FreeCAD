@@ -82,6 +82,32 @@ protected:
         return _sketch;
     }
 
+    static void addProfileLoop(
+        Sketcher::SketchObject* sketch,
+        const std::vector<Base::Vector3d>& points,
+        bool close = true
+    )
+    {
+        const size_t edgeCount = close ? points.size() : points.size() - 1;
+        for (size_t i = 0; i < edgeCount; ++i) {
+            auto line = std::make_unique<Part::GeomLineSegment>();
+            line->setPoints(points[i], points[(i + 1) % points.size()]);
+            sketch->addGeometry(std::move(line));
+        }
+    }
+
+    Sketcher::SketchObject* createThreadProfile(
+        const char* name,
+        const std::vector<Base::Vector3d>& points,
+        bool close = true
+    )
+    {
+        auto* profile = _doc->addObject<Sketcher::SketchObject>(name);
+        addProfileLoop(profile, points, close);
+        _doc->recompute();
+        return profile;
+    }
+
     PartDesign::Pad* createCylinderPad(double length = 30.0, double radius = 10.0)
     {
         auto doc = getDocument();
@@ -173,7 +199,7 @@ protected:
             if (surface.GetType() == GeomAbs_Cylinder) {
                 int idx = topo.findShape(face);
                 if (idx > 0) {
-                    return "Face" + std::to_string(idx);
+                return "Face" + std::to_string(idx);
                 }
             }
         }
@@ -186,6 +212,163 @@ private:
     PartDesign::Body* _body = nullptr;
     Sketcher::SketchObject* _sketch = nullptr;
 };
+
+TEST_F(ThreadTest, ThreadProfileLoaderCopiesValidNormalizedProfile)
+{
+    createThreadProfile(
+        "ThreadProfile",
+        {
+            Base::Vector3d(-0.75, 0.001, 0.0),
+            Base::Vector3d(0.0, 0.4375, 0.0),
+            Base::Vector3d(0.0, 0.5625, 0.0),
+            Base::Vector3d(-0.75, 0.999, 0.0),
+        }
+    );
+
+    PartDesign::ThreadUtils::ThreadDefinition definition;
+    PartDesign::ThreadUtils::findThreadProfiles(getDocument(), definition, "profile-test");
+
+    using Status = PartDesign::ThreadUtils::ThreadDefinition::ProfileStatus;
+    ASSERT_EQ(definition.profileStatus, Status::Valid) << definition.profileDiagnostic;
+    ASSERT_TRUE(definition.profile.has_value());
+    EXPECT_EQ(definition.externalProfileStatus, Status::Missing);
+    EXPECT_TRUE(definition.externalProfileDiagnostic.find("was not found") != std::string::npos);
+    EXPECT_NEAR(definition.profile->minX, -0.75, 1e-9);
+    EXPECT_NEAR(definition.profile->maxX, 0.0, 1e-9);
+    EXPECT_NEAR(definition.profile->minY, 0.001, 1e-9);
+    EXPECT_NEAR(definition.profile->maxY, 0.999, 1e-9);
+    EXPECT_TRUE(definition.profile->wire.isClosed());
+
+    getDocument()->removeObject("ThreadProfile");
+    getDocument()->recompute();
+    EXPECT_FALSE(definition.profile->wire.isNull());
+    EXPECT_TRUE(definition.profile->wire.isValid());
+}
+
+TEST_F(ThreadTest, ThreadProfileLoaderReadsOptionalExternalProfile)
+{
+    const std::vector<Base::Vector3d> commonProfile {
+        Base::Vector3d(-0.75, 0.001, 0.0),
+        Base::Vector3d(0.0, 0.4375, 0.0),
+        Base::Vector3d(0.0, 0.5625, 0.0),
+        Base::Vector3d(-0.75, 0.999, 0.0),
+    };
+    createThreadProfile("ThreadProfile", commonProfile);
+
+    auto externalProfile = commonProfile;
+    externalProfile[0].x = -0.8;
+    externalProfile[3].x = -0.8;
+    createThreadProfile("ExternalThreadProfile", externalProfile);
+
+    PartDesign::ThreadUtils::ThreadDefinition definition;
+    PartDesign::ThreadUtils::findThreadProfiles(getDocument(), definition, "profile-test");
+
+    using Status = PartDesign::ThreadUtils::ThreadDefinition::ProfileStatus;
+    ASSERT_EQ(definition.profileStatus, Status::Valid) << definition.profileDiagnostic;
+    ASSERT_EQ(definition.externalProfileStatus, Status::Valid)
+        << definition.externalProfileDiagnostic;
+    ASSERT_TRUE(definition.externalProfile.has_value());
+    EXPECT_NEAR(definition.externalProfile->minX, -0.8, 1e-9);
+    EXPECT_EQ(definition.sketches.size(), 2);
+}
+
+TEST_F(ThreadTest, ThreadProfileLoaderRejectsOpenProfile)
+{
+    createThreadProfile(
+        "ThreadProfile",
+        {
+            Base::Vector3d(-0.75, 0.001, 0.0),
+            Base::Vector3d(0.0, 0.4375, 0.0),
+            Base::Vector3d(0.0, 0.5625, 0.0),
+            Base::Vector3d(-0.75, 0.999, 0.0),
+        },
+        false
+    );
+
+    PartDesign::ThreadUtils::ThreadDefinition definition;
+    PartDesign::ThreadUtils::findThreadProfiles(getDocument(), definition, "profile-test");
+
+    using Status = PartDesign::ThreadUtils::ThreadDefinition::ProfileStatus;
+    EXPECT_EQ(definition.profileStatus, Status::Invalid);
+    EXPECT_FALSE(definition.profile.has_value());
+    EXPECT_TRUE(definition.profileDiagnostic.find("closed wire") != std::string::npos);
+}
+
+TEST_F(ThreadTest, ThreadProfileLoaderRejectsMultipleWires)
+{
+    auto* profile = createThreadProfile(
+        "ThreadProfile",
+        {
+            Base::Vector3d(-0.75, 0.001, 0.0),
+            Base::Vector3d(0.0, 0.4375, 0.0),
+            Base::Vector3d(0.0, 0.5625, 0.0),
+            Base::Vector3d(-0.75, 0.999, 0.0),
+        }
+    );
+    addProfileLoop(
+        profile,
+        {
+            Base::Vector3d(-0.5, 0.2, 0.0),
+            Base::Vector3d(-0.4, 0.2, 0.0),
+            Base::Vector3d(-0.4, 0.3, 0.0),
+            Base::Vector3d(-0.5, 0.3, 0.0),
+        }
+    );
+    getDocument()->recompute();
+
+    PartDesign::ThreadUtils::ThreadDefinition definition;
+    PartDesign::ThreadUtils::findThreadProfiles(getDocument(), definition, "profile-test");
+
+    using Status = PartDesign::ThreadUtils::ThreadDefinition::ProfileStatus;
+    EXPECT_EQ(definition.profileStatus, Status::Invalid);
+    EXPECT_TRUE(definition.profileDiagnostic.find("exactly one connected wire")
+                != std::string::npos);
+}
+
+TEST_F(ThreadTest, ThreadProfileLoaderRejectsClockwiseProfile)
+{
+    createThreadProfile(
+        "ThreadProfile",
+        {
+            Base::Vector3d(-0.75, 0.999, 0.0),
+            Base::Vector3d(0.0, 0.5625, 0.0),
+            Base::Vector3d(0.0, 0.4375, 0.0),
+            Base::Vector3d(-0.75, 0.001, 0.0),
+        }
+    );
+
+    PartDesign::ThreadUtils::ThreadDefinition definition;
+    PartDesign::ThreadUtils::findThreadProfiles(getDocument(), definition, "profile-test");
+
+    using Status = PartDesign::ThreadUtils::ThreadDefinition::ProfileStatus;
+    EXPECT_EQ(definition.profileStatus, Status::Invalid);
+    EXPECT_TRUE(definition.profileDiagnostic.find("counter-clockwise") != std::string::npos);
+}
+
+TEST_F(ThreadTest, ThreadProfileLoaderRejectsNonNormalizedAndPlacedProfiles)
+{
+    auto* profile = createThreadProfile(
+        "ThreadProfile",
+        {
+            Base::Vector3d(-0.75, -0.1, 0.0),
+            Base::Vector3d(0.0, 0.4375, 0.0),
+            Base::Vector3d(0.0, 0.5625, 0.0),
+            Base::Vector3d(-0.75, 0.999, 0.0),
+        }
+    );
+
+    PartDesign::ThreadUtils::ThreadDefinition definition;
+    PartDesign::ThreadUtils::findThreadProfiles(getDocument(), definition, "profile-test");
+
+    using Status = PartDesign::ThreadUtils::ThreadDefinition::ProfileStatus;
+    EXPECT_EQ(definition.profileStatus, Status::Invalid);
+    EXPECT_TRUE(definition.profileDiagnostic.find("range 0..1") != std::string::npos);
+
+    profile->Placement.setValue(Base::Placement(Base::Vector3d(0.0, 0.0, 1.0), Base::Rotation()));
+    PartDesign::ThreadUtils::findThreadProfiles(getDocument(), definition, "profile-test");
+    EXPECT_EQ(definition.profileStatus, Status::Invalid);
+    EXPECT_TRUE(definition.profileDiagnostic.find("XY plane") != std::string::npos);
+}
 
 TEST_F(ThreadTest, ThreadCreationOnCylinder)
 {

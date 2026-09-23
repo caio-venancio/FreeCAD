@@ -36,10 +36,16 @@
 #include <TopExp_Explorer.hxx>
 #include <TopoDS.hxx>
 #include <TopoDS_Face.hxx>
+#include <TopoDS_Vertex.hxx>
 #include <TopoDS_Wire.hxx>
 #include <BRepBuilderAPI_MakeWire.hxx>
 #include <BRepBuilderAPI_MakeEdge.hxx>
+#include <BRepBuilderAPI_MakeFace.hxx>
+#include <BRepBuilderAPI_MakeVertex.hxx>
 #include <BRepBuilderAPI_Copy.hxx>
+#include <BRepExtrema_DistShapeShape.hxx>
+#include <BRepGProp.hxx>
+#include <GProp_GProps.hxx>
 #include <BRepTools_WireExplorer.hxx>
 #include <GC_MakeArcOfCircle.hxx>
 #include <BRepBuilderAPI_MakeSolid.hxx>
@@ -62,9 +68,12 @@
 #include <QObject>
 #include "Feature.h"
 
+#include <algorithm>
+#include <iomanip>
 #include <numbers>
 #include <limits>
 #include <iostream>
+#include <sstream>
 
 #include "ThreadUtils.h"
 
@@ -719,6 +728,91 @@ ThreadUtils::ResolvedThreadSelection ThreadUtils::resolveThreadSelection(
     );
 }
 
+std::optional<ThreadUtils::PreparedThreadProfile> ThreadUtils::prepareThreadProfile(
+    int threadType,
+    int sizeIndex,
+    int pitchIndex,
+    bool isInternalThread,
+    double majorRadius,
+    const gp_Vec& xDir,
+    const gp_Vec& zDir
+) const
+{
+    const ResolvedThreadSelection selection = resolveThreadSelection(
+        threadType,
+        sizeIndex,
+        pitchIndex
+    );
+    const ThreadDefinition& definition = *selection.definition;
+
+    const ThreadDefinition::Profile* profile = nullptr;
+    ThreadProfileSource source = ThreadProfileSource::Common;
+    if (!isInternalThread
+        && definition.externalProfileStatus == ThreadDefinition::ProfileStatus::Valid
+        && definition.externalProfile) {
+        profile = &*definition.externalProfile;
+        source = ThreadProfileSource::External;
+    }
+    else if (definition.profileStatus == ThreadDefinition::ProfileStatus::Valid
+             && definition.profile) {
+        profile = &*definition.profile;
+    }
+
+    if (!profile) {
+        return std::nullopt;
+    }
+
+    if (selection.pitch <= Precision::Confusion()) {
+        throw Base::ValueError(QT_TRANSLATE_NOOP("Exception", "Thread pitch must be greater than zero"));
+    }
+    if (xDir.Magnitude() <= Precision::Confusion()
+        || zDir.Magnitude() <= Precision::Confusion()) {
+        throw Base::ValueError(QT_TRANSLATE_NOOP("Exception", "Thread profile directions must be non-zero"));
+    }
+
+    const gp_Dir radialDirection(xDir);
+    const gp_Dir axialDirection(zDir);
+    if (std::abs(radialDirection.Dot(axialDirection)) > Precision::Angular()) {
+        throw Base::ValueError(
+            QT_TRANSLATE_NOOP("Exception", "Thread profile directions must be perpendicular")
+        );
+    }
+    const gp_Dir normalDirection(radialDirection.Crossed(axialDirection));
+
+    const double pitch = selection.pitch;
+    gp_Trsf transform;
+    transform.SetValues(
+        pitch * radialDirection.X(),
+        pitch * axialDirection.X(),
+        pitch * normalDirection.X(),
+        majorRadius * radialDirection.X(),
+        pitch * radialDirection.Y(),
+        pitch * axialDirection.Y(),
+        pitch * normalDirection.Y(),
+        majorRadius * radialDirection.Y(),
+        pitch * radialDirection.Z(),
+        pitch * axialDirection.Z(),
+        pitch * normalDirection.Z(),
+        majorRadius * radialDirection.Z()
+    );
+
+    Part::TopoShape transformed;
+    transformed.makeElementTransform(
+        profile->wire,
+        transform,
+        nullptr,
+        Part::CopyType::copy
+    );
+    if (transformed.isNull() || transformed.shapeType() != TopAbs_WIRE
+        || !transformed.isValid() || !transformed.isClosed()) {
+        throw Base::CADKernelError(
+            QT_TRANSLATE_NOOP("Exception", "Thread profile transformation failed")
+        );
+    }
+
+    return PreparedThreadProfile {std::move(transformed), source};
+}
+
 double ThreadUtils::getMinorDiameterForRow(
     const ThreadDefinition& definition,
     size_t row,
@@ -931,6 +1025,142 @@ static gp_Pnt toPnt(gp_Vec dir)
     return {dir.X(), dir.Y(), dir.Z()};
 }
 
+namespace
+{
+
+struct ThreadProfileMetrics
+{
+    int edgeCount = 0;
+    std::string curveTypes;
+    double length = 0.0;
+    double area = 0.0;
+    gp_Pnt lengthCenter;
+    gp_Pnt areaCenter;
+    Base::BoundBox3d bounds;
+};
+
+const char* profileCurveTypeName(GeomAbs_CurveType type)
+{
+    switch (type) {
+        case GeomAbs_Line:
+            return "Line";
+        case GeomAbs_Circle:
+            return "Circle";
+        case GeomAbs_Ellipse:
+            return "Ellipse";
+        case GeomAbs_Hyperbola:
+            return "Hyperbola";
+        case GeomAbs_Parabola:
+            return "Parabola";
+        case GeomAbs_BezierCurve:
+            return "Bezier";
+        case GeomAbs_BSplineCurve:
+            return "BSpline";
+        case GeomAbs_OffsetCurve:
+            return "Offset";
+        default:
+            return "Other";
+    }
+}
+
+ThreadProfileMetrics measureThreadProfile(const TopoDS_Wire& wire)
+{
+    ThreadProfileMetrics metrics;
+    for (BRepTools_WireExplorer explorer(wire); explorer.More(); explorer.Next()) {
+        if (!metrics.curveTypes.empty()) {
+            metrics.curveTypes += ",";
+        }
+        const TopoDS_Edge edge = TopoDS::Edge(explorer.Current());
+        metrics.curveTypes += profileCurveTypeName(BRepAdaptor_Curve(edge).GetType());
+        ++metrics.edgeCount;
+    }
+
+    GProp_GProps linearProperties;
+    BRepGProp::LinearProperties(wire, linearProperties);
+    metrics.length = linearProperties.Mass();
+    metrics.lengthCenter = linearProperties.CentreOfMass();
+
+    BRepBuilderAPI_MakeFace faceBuilder(wire, true);
+    if (!faceBuilder.IsDone()) {
+        throw Base::CADKernelError(
+            QT_TRANSLATE_NOOP("Exception", "Could not create a face from the thread profile")
+        );
+    }
+    GProp_GProps surfaceProperties;
+    BRepGProp::SurfaceProperties(faceBuilder.Face(), surfaceProperties);
+    metrics.area = surfaceProperties.Mass();
+    metrics.areaCenter = surfaceProperties.CentreOfMass();
+    metrics.bounds = Part::TopoShape(wire).getBoundBox();
+    return metrics;
+}
+
+double sampledDistanceToWire(const TopoDS_Wire& sampledWire, const TopoDS_Wire& targetWire)
+{
+    constexpr int samplesPerEdge = 16;
+    double maximumDistance = 0.0;
+
+    for (BRepTools_WireExplorer explorer(sampledWire); explorer.More(); explorer.Next()) {
+        const TopoDS_Edge edge = TopoDS::Edge(explorer.Current());
+        const BRepAdaptor_Curve curve(edge);
+        const double first = curve.FirstParameter();
+        const double last = curve.LastParameter();
+
+        for (int sample = 0; sample <= samplesPerEdge; ++sample) {
+            const double ratio = static_cast<double>(sample) / samplesPerEdge;
+            const gp_Pnt point = curve.Value(first + ratio * (last - first));
+            const TopoDS_Vertex vertex = BRepBuilderAPI_MakeVertex(point).Vertex();
+            const BRepExtrema_DistShapeShape distance(vertex, targetWire);
+            if (!distance.IsDone() || distance.NbSolution() == 0) {
+                throw Base::CADKernelError(
+                    QT_TRANSLATE_NOOP("Exception", "Thread profile distance calculation failed")
+                );
+            }
+            maximumDistance = std::max(maximumDistance, distance.Value());
+        }
+    }
+
+    return maximumDistance;
+}
+
+void reportThreadProfileComparison(
+    const TopoDS_Wire& legacyWire,
+    const TopoDS_Wire& sketchWire,
+    const char* sketchSource
+)
+{
+    const ThreadProfileMetrics legacy = measureThreadProfile(legacyWire);
+    const ThreadProfileMetrics sketch = measureThreadProfile(sketchWire);
+    const double maximumDeviation = std::max(
+        sampledDistanceToWire(legacyWire, sketchWire),
+        sampledDistanceToWire(sketchWire, legacyWire)
+    );
+
+    std::ostringstream report;
+    report << std::fixed << std::setprecision(9)
+           << "[ThreadProfileComparison]: source=" << sketchSource << '\n'
+           << "  legacy: edges=" << legacy.edgeCount << " types=[" << legacy.curveTypes
+           << "] length=" << legacy.length << " area=" << legacy.area << '\n'
+           << "  sketch: edges=" << sketch.edgeCount << " types=[" << sketch.curveTypes
+           << "] length=" << sketch.length << " area=" << sketch.area << '\n'
+           << "  delta: length=" << sketch.length - legacy.length
+           << " area=" << sketch.area - legacy.area
+           << " lengthCenter=" << sketch.lengthCenter.Distance(legacy.lengthCenter)
+           << " areaCenter=" << sketch.areaCenter.Distance(legacy.areaCenter)
+           << " maxDeviation=" << maximumDeviation << '\n'
+           << "  bounds legacy=[" << legacy.bounds.MinX << ", " << legacy.bounds.MaxX
+           << "]x[" << legacy.bounds.MinY << ", " << legacy.bounds.MaxY << "]x["
+           << legacy.bounds.MinZ << ", " << legacy.bounds.MaxZ << "]\n"
+           << "  bounds sketch=[" << sketch.bounds.MinX << ", " << sketch.bounds.MaxX
+           << "]x[" << sketch.bounds.MinY << ", " << sketch.bounds.MaxY << "]x["
+           << sketch.bounds.MinZ << ", " << sketch.bounds.MaxZ << "]\n";
+
+    const std::string reportText = report.str();
+    Base::Console().message("%s", reportText.c_str());
+    std::clog << reportText;
+}
+
+}  // namespace
+
 double ThreadUtils::getThreadClassClearance(
     int threadType,
     int threadSize,
@@ -994,6 +1224,85 @@ void ThreadUtils::rotateToNormal(
         TopLoc_Location loc2(mov);
         helixShape.Move(loc2);
     }
+}
+
+Part::TopoShape ThreadUtils::makeLegacyThreadProfile(
+    const std::string& threadType,
+    double majorRadius,
+    double pitch,
+    const gp_Vec& xDir,
+    const gp_Vec& zDir
+) const
+{
+    constexpr double marginZ = 0.001;
+    BRepBuilderAPI_MakeWire wireBuilder;
+
+    if (threadType == "BSP" || threadType == "BSW" || threadType == "BSF") {
+        const double height = 0.960491 * pitch;
+        const double radius = 0.137329 * pitch;
+        const double marginX = std::tan(Base::toRadians(62.5)) * marginZ;
+        const double crestArcX = majorRadius - radius * 0.58284013094;
+
+        const gp_Pnt p1 = toPnt(
+            (majorRadius - 5.0 * height / 6.0 + marginX) * xDir + marginZ * zDir
+        );
+        const gp_Pnt p2 = toPnt(crestArcX * xDir + 3.0 * pitch / 8.0 * zDir);
+        const gp_Pnt crest = toPnt(majorRadius * xDir + pitch / 2.0 * zDir);
+        const gp_Pnt p3 = toPnt(crestArcX * xDir + 5.0 * pitch / 8.0 * zDir);
+        const gp_Pnt p4 = toPnt(
+            (majorRadius - 5.0 * height / 6.0 + marginX) * xDir
+            + (pitch - marginZ) * zDir
+        );
+
+        wireBuilder.Add(BRepBuilderAPI_MakeEdge(p1, p2).Edge());
+        const Handle(Geom_TrimmedCurve) crestArc = GC_MakeArcOfCircle(p2, crest, p3).Value();
+        wireBuilder.Add(BRepBuilderAPI_MakeEdge(crestArc).Edge());
+        wireBuilder.Add(BRepBuilderAPI_MakeEdge(p3, p4).Edge());
+        wireBuilder.Add(BRepBuilderAPI_MakeEdge(p4, p1).Edge());
+    }
+    else {
+        const double height = std::sqrt(3.0) / 2.0 * pitch;
+        const double profileDepth = 7.0 * height / 8.0;
+        const double marginX = std::tan(Base::toRadians(60.0)) * marginZ;
+
+        const gp_Pnt p1 = toPnt(
+            (majorRadius - profileDepth + marginX) * xDir + marginZ * zDir
+        );
+        const gp_Pnt p2 = toPnt(majorRadius * xDir + 7.0 * pitch / 16.0 * zDir);
+        const gp_Pnt p3 = toPnt(majorRadius * xDir + 9.0 * pitch / 16.0 * zDir);
+        const gp_Pnt p4 = toPnt(
+            (majorRadius - profileDepth + marginX) * xDir + (pitch - marginZ) * zDir
+        );
+
+        wireBuilder.Add(BRepBuilderAPI_MakeEdge(p1, p2).Edge());
+        if (threadType == "ISOTyre") {
+            const gp_Pnt crest = toPnt(
+                (majorRadius + pitch / 32.0) * xDir + pitch / 2.0 * zDir
+            );
+            const Handle(Geom_TrimmedCurve) crestArc = GC_MakeArcOfCircle(p2, crest, p3).Value();
+            wireBuilder.Add(BRepBuilderAPI_MakeEdge(crestArc).Edge());
+        }
+        else {
+            wireBuilder.Add(BRepBuilderAPI_MakeEdge(p2, p3).Edge());
+        }
+        wireBuilder.Add(BRepBuilderAPI_MakeEdge(p3, p4).Edge());
+        wireBuilder.Add(BRepBuilderAPI_MakeEdge(p4, p1).Edge());
+    }
+
+    wireBuilder.Build();
+    if (!wireBuilder.IsDone()) {
+        throw Base::CADKernelError(
+            QT_TRANSLATE_NOOP("Exception", "Legacy thread profile could not be built")
+        );
+    }
+
+    Part::TopoShape profile(wireBuilder.Wire());
+    if (!profile.isValid() || !profile.isClosed()) {
+        throw Base::CADKernelError(
+            QT_TRANSLATE_NOOP("Exception", "Legacy thread profile is invalid")
+        );
+    }
+    return profile;
 }
 
 
@@ -1082,12 +1391,6 @@ TopoDS_Shape ThreadUtils::makeThread(
         RmajC = Rmaj - clearance;
     }
     Base::Console().message("[makeThread]: RmajC: %lf\n", RmajC);
-    double marginZ = 0.001;
-
-    if (DEBUG) Base::Console().message("[makeThread]: Starting thread geometry construction...\n");
-
-    BRepBuilderAPI_MakeWire mkThreadWire;
-    double H;
 
     // std::string threadTypeStr = ThreadType.getValueAsString();
     // std::vector<std::string> threadTypes = ThreadUtils::getThreadTypeEnums();
@@ -1096,113 +1399,54 @@ TopoDS_Shape ThreadUtils::makeThread(
     if (DEBUG) Base::Console().message("[makeThread]: Selected thread type: '%s' (Index: %d, Pitch: %.4f, RmajC: %.4f)\n",
                             threadTypeStr.c_str(), currentThreadTypeIndex, Pitch, RmajC);
 
-    if (threadTypeStr == "BSP" || threadTypeStr == "BSW" || threadTypeStr == "BSF") {
-        if (DEBUG) Base::Console().message("[makeThread]: Building Whitworth profile (BSP/BSW/BSF)...\n");
+    const Part::TopoShape legacyProfile = makeLegacyThreadProfile(
+        threadTypeStr,
+        RmajC,
+        Pitch,
+        xDir,
+        zDir
+    );
+    const TopoDS_Wire threadWire = TopoDS::Wire(legacyProfile.getShape());
 
-        H = 0.960491 * Pitch;              // Height of Sharp V
-        double radius = 0.137329 * Pitch;  // radius of the crest
-        // construct the cross section going counter-clockwise
-        // --------------
-        // P    | p4
-        // 5/8P |                p3
-        //      |                         crest
-        // 3/8P |                p2
-        // 0    | p1
-        // --------------
-        //      | base-sharpV             Rmaj     H
-
-        // the little adjustment of p1 and p4 is here to prevent coincidencies
-        double marginX = std::tan(Base::toRadians(62.5)) * marginZ;
-
-        gp_Pnt p1 = toPnt((RmajC - 5 * H / 6 + marginX) * xDir + marginZ * zDir);
-        gp_Pnt p4 = toPnt((RmajC - 5 * H / 6 + marginX) * xDir + (Pitch - marginZ) * zDir);
-
-        // Calculate positions for p2 and p3
-        double p23x = RmajC - radius * 0.58284013094;
-
-        gp_Pnt p2 = toPnt(p23x * xDir + 3 * Pitch / 8 * zDir);
-        gp_Pnt p3 = toPnt(p23x * xDir + 5 * Pitch / 8 * zDir);
-        gp_Pnt crest = toPnt((RmajC)*xDir + Pitch / 2 * zDir);
-
-        mkThreadWire.Add(BRepBuilderAPI_MakeEdge(p1, p2).Edge());
-        Handle(Geom_TrimmedCurve) arc1 = GC_MakeArcOfCircle(p2, crest, p3).Value();
-        mkThreadWire.Add(BRepBuilderAPI_MakeEdge(arc1).Edge());
-        mkThreadWire.Add(BRepBuilderAPI_MakeEdge(p3, p4).Edge());
-        mkThreadWire.Add(BRepBuilderAPI_MakeEdge(p4, p1).Edge());
-    }
-    else {
-        if (DEBUG) Base::Console().message("[makeThread]: Building Standard/ISO/Metric profile...\n");
-
-        H = sqrt(3) / 2 * Pitch;  // height of fundamental triangle
-        double h = 7 * H / 8;     // distance from Rmaj to the base
-        // construct the cross section going counter-clockwise
-        // pitch
-        // --------------
-        // P     | p4
-        // 9/16P |                p3
-        // 7/16P |                p2
-        // 0     | p1
-        // --------------
-        //       | base-sharpV    Rmaj
-
-        // the little adjustment of p1 and p4 is here to prevent coincidencies
-        double temp = RmajC;
-        RmajC = RmajC; //+ 0.6325;
-        double marginX = std::tan(Base::toRadians(60.0)) * marginZ;
-        gp_Pnt p1 = toPnt((RmajC - h + marginX) * xDir + marginZ * zDir);
-        gp_Pnt p2 = toPnt((RmajC)*xDir + 7 * Pitch / 16 * zDir);
-        gp_Pnt p3 = toPnt((RmajC)*xDir + 9 * Pitch / 16 * zDir);
-        gp_Pnt p4 = toPnt((RmajC - h + marginX) * xDir + (Pitch - marginZ) * zDir);
-        RmajC = temp;
-
-        // if (DEBUG) {
-        // Base::Console().message("[makeThread DEBUG]: Profile Points Position:\n");
-        // Base::Console().message("  p1 -> X: %.6f, Y: %.6f, Z: %.6f\n", p1.X(), p1.Y(), p1.Z());
-        // Base::Console().message("  p2 -> X: %.6f, Y: %.6f, Z: %.6f\n", p2.X(), p2.Y(), p2.Z());
-        // Base::Console().message("  p3 -> X: %.6f, Y: %.6f, Z: %.6f\n", p3.X(), p3.Y(), p3.Z());
-        // Base::Console().message("  p4 -> X: %.6f, Y: %.6f, Z: %.6f\n", p4.X(), p4.Y(), p4.Z());
-
-        double d_p1_p2 = p1.Distance(p2);
-        double d_p2_p3 = p2.Distance(p3);
-        double d_p3_p4 = p3.Distance(p4);
-        double d_p4_p1 = p4.Distance(p1);
-
-        // if (DEBUG) {
-        Base::Console().message("[makeThread DEBUG]: Profile Edges Distances:\n");
-        Base::Console().message("  p1 -> p2: %.6f mm\n", d_p1_p2);
-        Base::Console().message("  p2 -> p3: %.6f mm\n", d_p2_p3);
-        Base::Console().message("  p3 -> p4: %.6f mm\n", d_p3_p4);
-        Base::Console().message("  p4 -> p1: %.6f mm\n", d_p4_p1);
-        // }
-
-        if (DEBUG) Base::Console().message("[makeThread]: Adding initial edge (p1 -> p2) to wire...\n");
-        mkThreadWire.Add(BRepBuilderAPI_MakeEdge(p1, p2).Edge());
-
-        if (threadTypeStr == "ISOTyre") {
-            if (DEBUG) Base::Console().message("[makeThread]: ISOTyre detected -> Adding crest arc (p2 -> crest -> p3)...\n");
-            gp_Pnt crest = toPnt((RmajC + (Pitch / 32)) * xDir + Pitch / 2 * zDir);
-            Handle(Geom_TrimmedCurve) arc1 = GC_MakeArcOfCircle(p2, crest, p3).Value();
-            mkThreadWire.Add(BRepBuilderAPI_MakeEdge(arc1).Edge());
+    try {
+        const auto preparedProfile = prepareThreadProfile(
+            threadType,
+            threadSize,
+            threadPitch,
+            isInternalThread,
+            RmajC,
+            xDir,
+            zDir
+        );
+        if (preparedProfile) {
+            const char* source = preparedProfile->source == ThreadProfileSource::External
+                ? "ExternalThreadProfile"
+                : "ThreadProfile";
+            reportThreadProfileComparison(
+                threadWire,
+                TopoDS::Wire(preparedProfile->wire.getShape()),
+                source
+            );
         }
-        else {
-            if (DEBUG) Base::Console().message("[makeThread]: Standard flat crest -> Adding straight edge (p2 -> p3)...\n");
-            mkThreadWire.Add(BRepBuilderAPI_MakeEdge(p2, p3).Edge());
-        }
-        
-        mkThreadWire.Add(BRepBuilderAPI_MakeEdge(p3, p4).Edge());
-        mkThreadWire.Add(BRepBuilderAPI_MakeEdge(p4, p1).Edge());
     }
-
-    if (DEBUG) Base::Console().message("[makeThread]: Building thread wire profile...\n");
-    mkThreadWire.Build();
-
-    if (!mkThreadWire.IsDone()) {
-        if (DEBUG) Base::Console().warning("[makeThread]: Failed to build thread wire profile!\n");
-    } else {
-        if (DEBUG) Base::Console().message("[makeThread]: Thread wire profile built successfully.\n");
+    catch (const Base::Exception& error) {
+        Base::Console().warning(
+            "[ThreadProfileComparison]: comparison skipped: %s\n",
+            error.what()
+        );
     }
-
-    TopoDS_Wire threadWire = mkThreadWire.Wire();
+    catch (const Standard_Failure& error) {
+        Base::Console().warning(
+            "[ThreadProfileComparison]: comparison skipped: %s\n",
+            error.GetMessageString()
+        );
+    }
+    catch (const std::exception& error) {
+        Base::Console().warning(
+            "[ThreadProfileComparison]: comparison skipped: %s\n",
+            error.what()
+        );
+    }
 
     // create the helix path
     // double threadDepth = ThreadDepth.getValue();
