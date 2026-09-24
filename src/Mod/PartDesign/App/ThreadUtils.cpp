@@ -43,9 +43,6 @@
 #include <BRepBuilderAPI_MakeFace.hxx>
 #include <BRepBuilderAPI_MakeVertex.hxx>
 #include <BRepBuilderAPI_Copy.hxx>
-#include <BRepExtrema_DistShapeShape.hxx>
-#include <BRepGProp.hxx>
-#include <GProp_GProps.hxx>
 #include <BRepTools_WireExplorer.hxx>
 #include <GC_MakeArcOfCircle.hxx>
 #include <BRepBuilderAPI_MakeSolid.hxx>
@@ -69,7 +66,6 @@
 #include "Feature.h"
 
 #include <algorithm>
-#include <iomanip>
 #include <numbers>
 #include <limits>
 #include <iostream>
@@ -589,51 +585,33 @@ std::vector<std::string> ThreadUtils::getThreadMinorDiameters(const int threadTy
 {
     std::vector<std::string> currentThreads = ThreadUtils::getThreadTypeNameEnums();
     std::string currentThread = currentThreads[threadType];
-    int currentThreadTypeIndex = threadTypeFromString(currentThread);
-
-    std::vector<std::string> minorDiameters, sizes, pitches;
+    const ThreadDefinition* selectedDefinition = nullptr;
     const auto& definitions = getThreadDefinitions();
     for (const auto& definition : definitions) {
         if (definition.name == currentThread) {
-            minorDiameters = definition.minorDiameters;
-            sizes = definition.sizes;
-            pitches = definition.pitches;
+            selectedDefinition = &definition;
             break;
         }
     }
 
     std::set<double> uniqueMinorDiameters;
 
-    // Tenta utilizar os minorDiameters se estiverem preenchidos na definição
-    bool hasMinorDiameters = !minorDiameters.empty();
-    if (hasMinorDiameters) {
-        for (const auto& minorDiameter : minorDiameters) {
-            if (!minorDiameter.empty()) {
-                double val = std::abs(std::stod(minorDiameter));
-                if (val > Precision::Confusion()) {
-                    uniqueMinorDiameters.insert(val);
-                }
+    if (selectedDefinition) {
+        const size_t rowCount = std::min(
+            selectedDefinition->sizes.size(),
+            selectedDefinition->pitches.size()
+        );
+        for (size_t row = 0; row < rowCount; ++row) {
+            if (selectedDefinition->sizes[row].empty()
+                || selectedDefinition->pitches[row].empty()) {
+                continue;
             }
+            uniqueMinorDiameters.insert(
+                getMinorDiameterForRow(*selectedDefinition, row, false)
+            );
         }
     }
 
-    // Se minorDiameters estiver vazio ou não contiver valores válidos, calcula a estimativa
-    if (uniqueMinorDiameters.empty() && !sizes.empty() && !pitches.empty()) {
-        std::string threadTypeStr = ThreadTypeEnums[currentThreadTypeIndex];
-        size_t count = std::min(sizes.size(), pitches.size());
-        for (size_t i = 0; i < count; ++i) {
-            if (!sizes[i].empty() && !pitches[i].empty()) {
-                double majorDiameter = std::stod(sizes[i]);
-                double pitch = std::stod(pitches[i]);
-                double estimated = estimateMinorDiameterFromProfile(threadTypeStr, majorDiameter, pitch) + 0.01;
-                if (estimated > Precision::Confusion()) {
-                    uniqueMinorDiameters.insert(estimated);
-                }
-            }
-        }
-    }
-
-    // Fallback padrão de segurança caso ainda permaneça sem dados
     if (uniqueMinorDiameters.empty()) {
         return {"6.0 mm"};
     }
@@ -650,23 +628,30 @@ std::vector<std::string> ThreadUtils::getThreadMinorDiameters(const int threadTy
     return designations;
 }
 
-double ThreadUtils::estimateMinorDiameterFromProfile(
-    const std::string& threadTypeStr,
+std::optional<double> ThreadUtils::estimateKnownMinorDiameter(
+    const std::string& threadDefinitionId,
     double majorDiameter,
     double pitch) const
 {
     double Rmaj = majorDiameter / 2.0;
     double rootRadius;
 
-    if (threadTypeStr == "BSP" || threadTypeStr == "BSW" || threadTypeStr == "BSF") {
+    if (threadDefinitionId == "BSP" || threadDefinitionId == "BSW"
+        || threadDefinitionId == "BSF") {
         double H = 0.960491 * pitch;
         rootRadius = Rmaj - (5.0 * H / 6.0);
     }
-    else {
+    else if (threadDefinitionId == "ISOMetricProfile"
+             || threadDefinitionId == "ISOMetricFineProfile"
+             || threadDefinitionId == "UNC" || threadDefinitionId == "UNF"
+             || threadDefinitionId == "UNEF" || threadDefinitionId == "NPT"
+             || threadDefinitionId == "ISOTyre") {
         double H = std::sqrt(3.0) / 2.0 * pitch;
-        // double h = 7.0 * H / 8.0;
         double h = 5.0 * H / 8.0;
         rootRadius = Rmaj - h;
+    }
+    else {
+        return std::nullopt;
     }
 
     if (rootRadius < 0.0) {
@@ -728,7 +713,7 @@ ThreadUtils::ResolvedThreadSelection ThreadUtils::resolveThreadSelection(
     );
 }
 
-std::optional<ThreadUtils::PreparedThreadProfile> ThreadUtils::prepareThreadProfile(
+std::optional<Part::TopoShape> ThreadUtils::prepareThreadProfile(
     int threadType,
     int sizeIndex,
     int pitchIndex,
@@ -746,12 +731,10 @@ std::optional<ThreadUtils::PreparedThreadProfile> ThreadUtils::prepareThreadProf
     const ThreadDefinition& definition = *selection.definition;
 
     const ThreadDefinition::Profile* profile = nullptr;
-    ThreadProfileSource source = ThreadProfileSource::Common;
     if (!isInternalThread
         && definition.externalProfileStatus == ThreadDefinition::ProfileStatus::Valid
         && definition.externalProfile) {
         profile = &*definition.externalProfile;
-        source = ThreadProfileSource::External;
     }
     else if (definition.profileStatus == ThreadDefinition::ProfileStatus::Valid
              && definition.profile) {
@@ -810,13 +793,13 @@ std::optional<ThreadUtils::PreparedThreadProfile> ThreadUtils::prepareThreadProf
         );
     }
 
-    return PreparedThreadProfile {std::move(transformed), source};
+    return transformed;
 }
 
 double ThreadUtils::getMinorDiameterForRow(
     const ThreadDefinition& definition,
     size_t row,
-    const std::string& threadTypeStr
+    bool preferExternalProfile
 ) const
 {
     if (row >= definition.sizes.size() || row >= definition.pitches.size()) {
@@ -826,19 +809,73 @@ double ThreadUtils::getMinorDiameterForRow(
     if (row < definition.minorDiameters.size() && !definition.minorDiameters[row].empty()) {
         try {
             const double value = std::abs(std::stod(definition.minorDiameters[row]));
-            if (value > Precision::Confusion()) {
-                return value;
+            const double majorDiameter = std::stod(definition.sizes[row]);
+            if (value <= Precision::Confusion() || value >= majorDiameter) {
+                throw Base::ValueError(
+                    "Thread definition '" + definition.id
+                    + "' contains an invalid minor diameter"
+                );
             }
+            return value;
+        }
+        catch (const Base::ValueError&) {
+            throw;
         }
         catch (const std::exception&) {
-            // Invalid or absent values use the profile-based fallback below.
+            throw Base::ValueError(
+                "Thread definition '" + definition.id
+                + "' contains an invalid minor diameter"
+            );
         }
     }
 
     const double majorDiameter = std::stod(definition.sizes[row]);
     const double pitch = std::stod(definition.pitches[row]);
-    return estimateMinorDiameterFromProfile(threadTypeStr, majorDiameter, pitch)
-        + minorDiameterFuseOverlap;
+    if (majorDiameter <= Precision::Confusion() || pitch <= Precision::Confusion()) {
+        throw Base::ValueError(
+            "Thread definition '" + definition.id
+            + "' must contain positive major diameter and pitch values"
+        );
+    }
+
+    std::optional<double> minorDiameter = estimateKnownMinorDiameter(
+        definition.id,
+        majorDiameter,
+        pitch
+    );
+
+    if (!minorDiameter) {
+        const ThreadDefinition::Profile* profile = nullptr;
+        if (preferExternalProfile
+            && definition.externalProfileStatus == ThreadDefinition::ProfileStatus::Valid
+            && definition.externalProfile) {
+            profile = &*definition.externalProfile;
+        }
+        else if (definition.profileStatus == ThreadDefinition::ProfileStatus::Valid
+                 && definition.profile) {
+            profile = &*definition.profile;
+        }
+
+        if (!profile) {
+            throw Base::ValueError(
+                "Thread definition '" + definition.id
+                + "' has no minor diameter, known family formula, or valid thread profile"
+            );
+        }
+
+        const double profileDepth = (profile->maxX - profile->minX) * pitch;
+        minorDiameter = majorDiameter - 2.0 * profileDepth;
+    }
+
+    *minorDiameter += minorDiameterFuseOverlap;
+    if (*minorDiameter <= Precision::Confusion() || *minorDiameter >= majorDiameter) {
+        throw Base::ValueError(
+            "Thread definition '" + definition.id
+            + "' produces an invalid minor diameter"
+        );
+    }
+
+    return *minorDiameter;
 }
 
 double ThreadUtils::getMinorDiameter(
@@ -848,12 +885,10 @@ double ThreadUtils::getMinorDiameter(
 ) const
 {
     const ResolvedThreadSelection selection = resolveThreadSelection(threadType, size, pitch);
-    const std::vector<std::string> currentThreads = getThreadTypeNameEnums();
-    const int threadTypeIndex = threadTypeFromString(currentThreads[threadType]);
     return getMinorDiameterForRow(
         *selection.definition,
         selection.row,
-        ThreadTypeEnums[threadTypeIndex]
+        true
     );
 }
 
@@ -1024,142 +1059,6 @@ static gp_Pnt toPnt(gp_Vec dir)
 {
     return {dir.X(), dir.Y(), dir.Z()};
 }
-
-namespace
-{
-
-struct ThreadProfileMetrics
-{
-    int edgeCount = 0;
-    std::string curveTypes;
-    double length = 0.0;
-    double area = 0.0;
-    gp_Pnt lengthCenter;
-    gp_Pnt areaCenter;
-    Base::BoundBox3d bounds;
-};
-
-const char* profileCurveTypeName(GeomAbs_CurveType type)
-{
-    switch (type) {
-        case GeomAbs_Line:
-            return "Line";
-        case GeomAbs_Circle:
-            return "Circle";
-        case GeomAbs_Ellipse:
-            return "Ellipse";
-        case GeomAbs_Hyperbola:
-            return "Hyperbola";
-        case GeomAbs_Parabola:
-            return "Parabola";
-        case GeomAbs_BezierCurve:
-            return "Bezier";
-        case GeomAbs_BSplineCurve:
-            return "BSpline";
-        case GeomAbs_OffsetCurve:
-            return "Offset";
-        default:
-            return "Other";
-    }
-}
-
-ThreadProfileMetrics measureThreadProfile(const TopoDS_Wire& wire)
-{
-    ThreadProfileMetrics metrics;
-    for (BRepTools_WireExplorer explorer(wire); explorer.More(); explorer.Next()) {
-        if (!metrics.curveTypes.empty()) {
-            metrics.curveTypes += ",";
-        }
-        const TopoDS_Edge edge = TopoDS::Edge(explorer.Current());
-        metrics.curveTypes += profileCurveTypeName(BRepAdaptor_Curve(edge).GetType());
-        ++metrics.edgeCount;
-    }
-
-    GProp_GProps linearProperties;
-    BRepGProp::LinearProperties(wire, linearProperties);
-    metrics.length = linearProperties.Mass();
-    metrics.lengthCenter = linearProperties.CentreOfMass();
-
-    BRepBuilderAPI_MakeFace faceBuilder(wire, true);
-    if (!faceBuilder.IsDone()) {
-        throw Base::CADKernelError(
-            QT_TRANSLATE_NOOP("Exception", "Could not create a face from the thread profile")
-        );
-    }
-    GProp_GProps surfaceProperties;
-    BRepGProp::SurfaceProperties(faceBuilder.Face(), surfaceProperties);
-    metrics.area = surfaceProperties.Mass();
-    metrics.areaCenter = surfaceProperties.CentreOfMass();
-    metrics.bounds = Part::TopoShape(wire).getBoundBox();
-    return metrics;
-}
-
-double sampledDistanceToWire(const TopoDS_Wire& sampledWire, const TopoDS_Wire& targetWire)
-{
-    constexpr int samplesPerEdge = 16;
-    double maximumDistance = 0.0;
-
-    for (BRepTools_WireExplorer explorer(sampledWire); explorer.More(); explorer.Next()) {
-        const TopoDS_Edge edge = TopoDS::Edge(explorer.Current());
-        const BRepAdaptor_Curve curve(edge);
-        const double first = curve.FirstParameter();
-        const double last = curve.LastParameter();
-
-        for (int sample = 0; sample <= samplesPerEdge; ++sample) {
-            const double ratio = static_cast<double>(sample) / samplesPerEdge;
-            const gp_Pnt point = curve.Value(first + ratio * (last - first));
-            const TopoDS_Vertex vertex = BRepBuilderAPI_MakeVertex(point).Vertex();
-            const BRepExtrema_DistShapeShape distance(vertex, targetWire);
-            if (!distance.IsDone() || distance.NbSolution() == 0) {
-                throw Base::CADKernelError(
-                    QT_TRANSLATE_NOOP("Exception", "Thread profile distance calculation failed")
-                );
-            }
-            maximumDistance = std::max(maximumDistance, distance.Value());
-        }
-    }
-
-    return maximumDistance;
-}
-
-void reportThreadProfileComparison(
-    const TopoDS_Wire& legacyWire,
-    const TopoDS_Wire& sketchWire,
-    const char* sketchSource
-)
-{
-    const ThreadProfileMetrics legacy = measureThreadProfile(legacyWire);
-    const ThreadProfileMetrics sketch = measureThreadProfile(sketchWire);
-    const double maximumDeviation = std::max(
-        sampledDistanceToWire(legacyWire, sketchWire),
-        sampledDistanceToWire(sketchWire, legacyWire)
-    );
-
-    std::ostringstream report;
-    report << std::fixed << std::setprecision(9)
-           << "[ThreadProfileComparison]: source=" << sketchSource << '\n'
-           << "  legacy: edges=" << legacy.edgeCount << " types=[" << legacy.curveTypes
-           << "] length=" << legacy.length << " area=" << legacy.area << '\n'
-           << "  sketch: edges=" << sketch.edgeCount << " types=[" << sketch.curveTypes
-           << "] length=" << sketch.length << " area=" << sketch.area << '\n'
-           << "  delta: length=" << sketch.length - legacy.length
-           << " area=" << sketch.area - legacy.area
-           << " lengthCenter=" << sketch.lengthCenter.Distance(legacy.lengthCenter)
-           << " areaCenter=" << sketch.areaCenter.Distance(legacy.areaCenter)
-           << " maxDeviation=" << maximumDeviation << '\n'
-           << "  bounds legacy=[" << legacy.bounds.MinX << ", " << legacy.bounds.MaxX
-           << "]x[" << legacy.bounds.MinY << ", " << legacy.bounds.MaxY << "]x["
-           << legacy.bounds.MinZ << ", " << legacy.bounds.MaxZ << "]\n"
-           << "  bounds sketch=[" << sketch.bounds.MinX << ", " << sketch.bounds.MaxX
-           << "]x[" << sketch.bounds.MinY << ", " << sketch.bounds.MaxY << "]x["
-           << sketch.bounds.MinZ << ", " << sketch.bounds.MaxZ << "]\n";
-
-    const std::string reportText = report.str();
-    Base::Console().message("%s", reportText.c_str());
-    std::clog << reportText;
-}
-
-}  // namespace
 
 double ThreadUtils::getThreadClassClearance(
     int threadType,
@@ -1399,54 +1298,29 @@ TopoDS_Shape ThreadUtils::makeThread(
     if (DEBUG) Base::Console().message("[makeThread]: Selected thread type: '%s' (Index: %d, Pitch: %.4f, RmajC: %.4f)\n",
                             threadTypeStr.c_str(), currentThreadTypeIndex, Pitch, RmajC);
 
-    const Part::TopoShape legacyProfile = makeLegacyThreadProfile(
-        threadTypeStr,
+    Part::TopoShape threadProfile;
+    const auto preparedProfile = prepareThreadProfile(
+        threadType,
+        threadSize,
+        threadPitch,
+        isInternalThread,
         RmajC,
-        Pitch,
         xDir,
         zDir
     );
-    const TopoDS_Wire threadWire = TopoDS::Wire(legacyProfile.getShape());
-
-    try {
-        const auto preparedProfile = prepareThreadProfile(
-            threadType,
-            threadSize,
-            threadPitch,
-            isInternalThread,
+    if (preparedProfile) {
+        threadProfile = *preparedProfile;
+    }
+    else {
+        threadProfile = makeLegacyThreadProfile(
+            threadTypeStr,
             RmajC,
+            Pitch,
             xDir,
             zDir
         );
-        if (preparedProfile) {
-            const char* source = preparedProfile->source == ThreadProfileSource::External
-                ? "ExternalThreadProfile"
-                : "ThreadProfile";
-            reportThreadProfileComparison(
-                threadWire,
-                TopoDS::Wire(preparedProfile->wire.getShape()),
-                source
-            );
-        }
     }
-    catch (const Base::Exception& error) {
-        Base::Console().warning(
-            "[ThreadProfileComparison]: comparison skipped: %s\n",
-            error.what()
-        );
-    }
-    catch (const Standard_Failure& error) {
-        Base::Console().warning(
-            "[ThreadProfileComparison]: comparison skipped: %s\n",
-            error.GetMessageString()
-        );
-    }
-    catch (const std::exception& error) {
-        Base::Console().warning(
-            "[ThreadProfileComparison]: comparison skipped: %s\n",
-            error.what()
-        );
-    }
+    const TopoDS_Wire threadWire = TopoDS::Wire(threadProfile.getShape());
 
     // create the helix path
     // double threadDepth = ThreadDepth.getValue();
@@ -1689,8 +1563,6 @@ std::optional<ThreadUtils::ThreadSizeSelection> ThreadUtils::findNearestMinorThr
     }
 
     const std::string& currentThread = currentThreads[threadType];
-    const int threadTypeIndex = threadTypeFromString(currentThread);
-    const std::string threadTypeStr = ThreadTypeEnums[threadTypeIndex];
     const std::vector<std::string> diameters = getThreadDiameters(threadType);
     std::optional<ThreadSizeSelection> bestSelection;
     double bestDistance = std::numeric_limits<double>::max();
@@ -1736,7 +1608,7 @@ std::optional<ThreadUtils::ThreadSizeSelection> ThreadUtils::findNearestMinorThr
             const double minorDiameter = getMinorDiameterForRow(
                 definition,
                 row,
-                threadTypeStr
+                false
             );
             const double distance = std::abs(minorDiameter - diameter);
             if (distance < bestDistance) {
@@ -2238,6 +2110,13 @@ std::optional<ThreadUtils::ThreadDefinition::Profile> readThreadProfile(
         status = ProfileStatus::Invalid;
         diagnostic = std::string("Object '") + objectName
             + "' must use normalized axial coordinates in the range 0..1";
+        return std::nullopt;
+    }
+
+    if (std::abs(bounds.MaxX) > tolerance) {
+        status = ProfileStatus::Invalid;
+        diagnostic = std::string("Object '") + objectName
+            + "' must reach X = 0 at the major-radius reference";
         return std::nullopt;
     }
 

@@ -271,25 +271,7 @@ public:
         const int threadType,
         const double diameter
     ) const;
-    double estimateMinorDiameterFromProfile(
-        const std::string& threadTypeStr,
-        double majorDiameter,
-        double pitch
-    ) const;
-
 private:
-    enum class ThreadProfileSource
-    {
-        Common,
-        External
-    };
-
-    struct PreparedThreadProfile
-    {
-        Part::TopoShape wire;
-        ThreadProfileSource source;
-    };
-
     struct ResolvedThreadSelection
     {
         const ThreadDefinition* definition;
@@ -303,7 +285,7 @@ private:
         int sizeIndex,
         int pitchIndex
     ) const;
-    std::optional<PreparedThreadProfile> prepareThreadProfile(
+    std::optional<Part::TopoShape> prepareThreadProfile(
         int threadType,
         int sizeIndex,
         int pitchIndex,
@@ -319,10 +301,15 @@ private:
         const gp_Vec& xDir,
         const gp_Vec& zDir
     ) const;
+    std::optional<double> estimateKnownMinorDiameter(
+        const std::string& threadDefinitionId,
+        double majorDiameter,
+        double pitch
+    ) const;
     double getMinorDiameterForRow(
         const ThreadDefinition& definition,
         size_t row,
-        const std::string& threadTypeStr
+        bool preferExternalProfile
     ) const;
     double getThreadClassClearance(
         int threadType,

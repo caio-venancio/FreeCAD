@@ -368,6 +368,20 @@ TEST_F(ThreadTest, ThreadProfileLoaderRejectsNonNormalizedAndPlacedProfiles)
     PartDesign::ThreadUtils::findThreadProfiles(getDocument(), definition, "profile-test");
     EXPECT_EQ(definition.profileStatus, Status::Invalid);
     EXPECT_TRUE(definition.profileDiagnostic.find("XY plane") != std::string::npos);
+
+    getDocument()->removeObject("ThreadProfile");
+    createThreadProfile(
+        "ThreadProfile",
+        {
+            Base::Vector3d(-0.75, 0.001, 0.0),
+            Base::Vector3d(-0.1, 0.4375, 0.0),
+            Base::Vector3d(-0.1, 0.5625, 0.0),
+            Base::Vector3d(-0.75, 0.999, 0.0),
+        }
+    );
+    PartDesign::ThreadUtils::findThreadProfiles(getDocument(), definition, "profile-test");
+    EXPECT_EQ(definition.profileStatus, Status::Invalid);
+    EXPECT_TRUE(definition.profileDiagnostic.find("X = 0") != std::string::npos);
 }
 
 TEST_F(ThreadTest, ThreadCreationOnCylinder)
