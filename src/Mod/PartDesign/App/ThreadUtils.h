@@ -25,6 +25,7 @@
 #pragma once
 
 #include <BRepAdaptor_Curve.hxx>
+#include <TopoDS_Wire.hxx>
 
 #include <Mod/Part/App/TopoShape.h>
 #include <Mod/PartDesign/PartDesignGlobal.h>
@@ -98,6 +99,16 @@ public:
     std::vector<gp_Pnt> findLineCurveIntersections(const gp_Lin& line, const BRepAdaptor_Curve& curve);
     std::vector<std::string> getThreadPitches(const int threadType, const int threadDiameter) const;
     double getThreadPitch(const int threadType, const int threadDiameter, const int threadPitch) const;
+    static double calculateThreadEndTrim(
+        const TopoDS_Wire& normalizedProfile,
+        double pitch
+    );
+    double getThreadEndTrim(
+        int threadType,
+        int sizeIndex,
+        int pitchIndex,
+        bool isInternalThread
+    ) const;
     std::vector<std::string> getThreadClasses(const int threadType, const bool isInternal) const;
     std::string getThreadDesignations(
         const int threadType,
@@ -296,6 +307,12 @@ private:
     ) const;
     Part::TopoShape makeLegacyThreadProfile(
         const std::string& threadType,
+        double majorRadius,
+        double pitch,
+        const gp_Vec& xDir,
+        const gp_Vec& zDir
+    ) const;
+    Part::TopoShape makeExtendedWhitworthThreadProfile(
         double majorRadius,
         double pitch,
         const gp_Vec& xDir,

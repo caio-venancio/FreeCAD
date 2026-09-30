@@ -108,6 +108,11 @@ protected:
         return profile;
     }
 
+    static TopoDS_Wire getProfileWire(const Sketcher::SketchObject* profile)
+    {
+        return TopoDS::Wire(profile->Shape.getShape().getShape());
+    }
+
     PartDesign::Pad* createCylinderPad(double length = 30.0, double radius = 10.0)
     {
         auto doc = getDocument();
@@ -384,6 +389,97 @@ TEST_F(ThreadTest, ThreadProfileLoaderRejectsNonNormalizedAndPlacedProfiles)
     EXPECT_TRUE(definition.profileDiagnostic.find("X = 0") != std::string::npos);
 }
 
+TEST_F(ThreadTest, ThreadEndTrimKeepsPreferredEighthPitchWhenSafe)
+{
+    auto* profile = createThreadProfile(
+        "TrimProfile",
+        {
+            Base::Vector3d(-0.75, 0.001, 0.0),
+            Base::Vector3d(0.0, 0.4375, 0.0),
+            Base::Vector3d(0.0, 0.5625, 0.0),
+            Base::Vector3d(-0.75, 0.999, 0.0),
+        }
+    );
+
+    constexpr double pitch = 2.0;
+    EXPECT_NEAR(
+        PartDesign::ThreadUtils::calculateThreadEndTrim(getProfileWire(profile), pitch),
+        pitch / 8.0,
+        1e-9
+    );
+}
+
+TEST_F(ThreadTest, ThreadEndTrimAvoidsWhitworthRootTangentVertices)
+{
+    auto* profile = createThreadProfile(
+        "TrimProfile",
+        {
+            Base::Vector3d(-0.8, 0.0, 0.0),
+            Base::Vector3d(-0.64, 0.125, 0.0),
+            Base::Vector3d(-0.08, 0.375, 0.0),
+            Base::Vector3d(0.0, 0.5, 0.0),
+            Base::Vector3d(-0.08, 0.625, 0.0),
+            Base::Vector3d(-0.64, 0.875, 0.0),
+            Base::Vector3d(-0.8, 1.0, 0.0),
+        }
+    );
+
+    constexpr double pitch = 2.0;
+    EXPECT_NEAR(
+        PartDesign::ThreadUtils::calculateThreadEndTrim(getProfileWire(profile), pitch),
+        pitch / 4.0,
+        1e-9
+    );
+}
+
+TEST_F(ThreadTest, ThreadEndTrimChecksBothEndsForAsymmetricProfiles)
+{
+    auto* profile = createThreadProfile(
+        "TrimProfile",
+        {
+            Base::Vector3d(-0.75, 0.0, 0.0),
+            Base::Vector3d(0.0, 0.3, 0.0),
+            Base::Vector3d(0.0, 0.6, 0.0),
+            Base::Vector3d(-0.2, 0.875, 0.0),
+            Base::Vector3d(-0.75, 1.0, 0.0),
+        }
+    );
+
+    constexpr double pitch = 2.0;
+    EXPECT_NEAR(
+        PartDesign::ThreadUtils::calculateThreadEndTrim(getProfileWire(profile), pitch),
+        0.2125 * pitch,
+        1e-9
+    );
+}
+
+TEST_F(ThreadTest, ThreadEndTrimRejectsInvalidInputs)
+{
+    auto* openProfile = createThreadProfile(
+        "OpenTrimProfile",
+        {
+            Base::Vector3d(-0.75, 0.001, 0.0),
+            Base::Vector3d(0.0, 0.4375, 0.0),
+            Base::Vector3d(0.0, 0.5625, 0.0),
+            Base::Vector3d(-0.75, 0.999, 0.0),
+        },
+        false
+    );
+
+    EXPECT_THROW(
+        PartDesign::ThreadUtils::calculateThreadEndTrim(TopoDS_Wire(), 1.0),
+        Base::ValueError
+    );
+    EXPECT_THROW(
+        PartDesign::ThreadUtils::calculateThreadEndTrim(getProfileWire(openProfile), 1.0),
+        Base::ValueError
+    );
+    EXPECT_THROW(
+        PartDesign::ThreadUtils::calculateThreadEndTrim(getProfileWire(openProfile), 0.0),
+        Base::ValueError
+    );
+}
+
 TEST_F(ThreadTest, ThreadCreationOnCylinder)
 {
     auto doc = getDocument();
@@ -651,5 +747,90 @@ TEST_F(ThreadTest, ExternalThreadModeledM24FineSignature)
     EXPECT_FALSE(thread->IsInternal.getValue());
     EXPECT_EQ(std::string(thread->ThreadDesignation.getValue()), "M24x2.0");
 }
+
+// TEST_F(ThreadTest, ExternalThreadModeledBSPHalfInchLegacySignature)
+// {
+//     constexpr double majorDiameter = 20.955;
+//     constexpr double length = 24.0;
+
+//     auto doc = getDocument();
+//     auto body = getBody();
+//     auto pad = createCylinderPad(length, majorDiameter / 2.0);
+//     ASSERT_NE(pad, nullptr);
+
+//     auto thread = doc->addObject<PartDesign::Thread>("Thread");
+//     body->addObject(thread);
+
+//     auto lateralFace = getLateralFaceName(pad);
+//     ASSERT_TRUE(lateralFace.has_value());
+//     thread->LateralFace.setValue(pad, {*lateralFace});
+
+//     thread->DepthType.setValue(0L);  // "Dimension"
+//     thread->Depth.setValue(length);
+
+//     int typeIdx = findEnumIndex(thread->ThreadType.getEnumVector(), "BSP");
+//     ASSERT_GE(typeIdx, 0) << "BSP was not found in enum";
+//     thread->ThreadType.setValue(typeIdx);
+
+//     int sizeIdx = findEnumIndex(thread->ThreadSize.getEnumVector(), "20.955");
+//     ASSERT_GE(sizeIdx, 0) << "BSP 1/2 major diameter was not found in enum";
+//     thread->ThreadSize.setValue(sizeIdx);
+
+//     int pitchIdx = findEnumIndex(thread->ThreadSizePitch.getEnumVector(), "1.814");
+//     ASSERT_GE(pitchIdx, 0) << "BSP 1/2 pitch was not found in enum";
+//     thread->ThreadSizePitch.setValue(pitchIdx);
+
+//     thread->UseCustomThreadClearance.setValue(true);
+//     thread->CustomThreadClearance.setValue(0.0);
+//     thread->ModelThread.setValue(true);
+//     thread->CosmeticThread.setValue(false);
+
+//     doc->recompute();
+
+//     ASSERT_FALSE(thread->isError()) << thread->getStatusString();
+//     ASSERT_TRUE(thread->isValid());
+
+//     const TopoDS_Shape& shape = thread->Shape.getValue();
+
+//     GProp_GProps volProps;
+//     BRepGProp::VolumeProperties(shape, volProps);
+//     GProp_GProps surfProps;
+//     BRepGProp::SurfaceProperties(shape, surfProps);
+//     const gp_Pnt com = volProps.CentreOfMass();
+
+//     Bnd_Box box;
+//     BRepBndLib::Add(shape, box);
+//     double xmin, ymin, zmin, xmax, ymax, zmax;
+//     box.Get(xmin, ymin, zmin, xmax, ymax, zmax);
+
+//     int nFaces = 0;
+//     int nEdges = 0;
+//     int nVertices = 0;
+//     for (TopExp_Explorer e(shape, TopAbs_FACE); e.More(); e.Next()) ++nFaces;
+//     for (TopExp_Explorer e(shape, TopAbs_EDGE); e.More(); e.Next()) ++nEdges;
+//     for (TopExp_Explorer e(shape, TopAbs_VERTEX); e.More(); e.Next()) ++nVertices;
+
+//     EXPECT_NEAR(volProps.Mass(), 7290.0134362847, 1e-3);
+//     EXPECT_NEAR(surfProps.Mass(), 3291.61701096588, 1e-3);
+
+//     EXPECT_NEAR(com.X(), -0.00234325479802929, 1e-3);
+//     EXPECT_NEAR(com.Y(), -0.0380918823304115, 1e-3);
+//     EXPECT_NEAR(com.Z(), 12.000003064811, 1e-3);
+
+//     EXPECT_NEAR(xmin, -10.5118429167223, 1e-3);
+//     EXPECT_NEAR(ymin, -11.7766716237672, 1e-3);
+//     EXPECT_NEAR(zmin, -0.225755, 1e-3);
+//     EXPECT_NEAR(xmax, 10.9834194583173, 1e-3);
+//     EXPECT_NEAR(ymax, 10.7476288112927, 1e-3);
+//     EXPECT_NEAR(zmax, 24.2257219690522, 1e-3);
+
+//     EXPECT_EQ(nFaces, 57);
+//     EXPECT_EQ(nEdges, 232);
+//     EXPECT_EQ(nVertices, 464);
+
+//     EXPECT_NEAR(thread->Diameter.getValue(), majorDiameter, 1e-9);
+//     EXPECT_FALSE(thread->IsInternal.getValue());
+//     EXPECT_FALSE(shape.IsNull());
+// }
 
 // NOLINTEND(readability-magic-numbers,cppcoreguidelines-avoid-magic-numbers)

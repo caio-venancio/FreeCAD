@@ -307,7 +307,14 @@ App::DocumentObjectExecReturn* Thread::execute()
                 );
             }
 
-            const double endTrim = selectedPitch / 8.0;
+            double endTrim = threadUtils.getThreadEndTrim(
+                ThreadType.getValue(),
+                ThreadSize.getValue(),
+                ThreadSizePitch.getValue(),
+                IsInternal.getValue()
+            );
+            endTrim = 0;
+            Base::Console().message("[endTrim]: %lf\n", endTrim);
             const double usefulThreadLength = length - selectedPitch;
             if (usefulThreadLength <= Precision::Confusion()) {
                 return new App::DocumentObjectExecReturn(
@@ -391,8 +398,8 @@ App::DocumentObjectExecReturn* Thread::execute()
                 );
             }
 
-            // makeThread() is deliberately extended by P/8 at both ends.  Keep only the
-            // nominal axial interval with one common operation against a coaxial cylinder.
+            // makeThread() is deliberately extended by the profile-dependent endTrim at
+            // both ends. Keep only the nominal interval with a coaxial-cylinder common.
             Bnd_Box threadBounds;
             BRepBndLib::Add(thread, threadBounds);
             if (threadBounds.IsVoid()) {

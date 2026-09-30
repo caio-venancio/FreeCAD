@@ -82,6 +82,15 @@ namespace
 constexpr double threadDefinitionTolerance = 0.001;
 // The fallback cylinder must overlap the generated thread instead of merely touching it.
 constexpr double minorDiameterFuseOverlap = 0.01;
+
+// Development switch for comparing the legacy Whitworth profile with the extended-root
+// profile without changing the document schema or user interface.
+constexpr bool useExtendedWhitworthRoot = true;
+
+bool isWhitworthThread(const std::string& threadType)
+{
+    return threadType == "BSP" || threadType == "BSW" || threadType == "BSF";
+}
 }
 
 /* "None" profile */
@@ -639,7 +648,7 @@ std::optional<double> ThreadUtils::estimateKnownMinorDiameter(
     if (threadDefinitionId == "BSP" || threadDefinitionId == "BSW"
         || threadDefinitionId == "BSF") {
         double H = 0.960491 * pitch;
-        rootRadius = Rmaj - (5.0 * H / 6.0);
+        rootRadius = Rmaj - (2.0 * H / 3.0);
     }
     else if (threadDefinitionId == "ISOMetricProfile"
              || threadDefinitionId == "ISOMetricFineProfile"
@@ -1204,6 +1213,314 @@ Part::TopoShape ThreadUtils::makeLegacyThreadProfile(
     return profile;
 }
 
+Part::TopoShape ThreadUtils::makeExtendedWhitworthThreadProfile(
+    double majorRadius,
+    double pitch,
+    const gp_Vec& xDir,
+    const gp_Vec& zDir
+) const
+{
+    constexpr double marginZ = 0.001;
+    constexpr double tangentOffsetFactor = 0.58284013094;
+
+    const double height = 0.960491 * pitch;
+    const double arcRadius = 0.137329 * pitch;
+
+    // The sharp-root radius is used only for the hidden tail which overlaps the
+    // supporting cylinder.  The visible Whitworth root is the rounded 2H/3 profile.
+    const double sharpRootRadius = majorRadius - 5.0 * height / 6.0;
+    const double finishedRootRadius = majorRadius - 2.0 * height / 3.0;
+    const double crestTangentRadius = majorRadius - arcRadius * tangentOffsetFactor;
+    const double rootTangentRadius = finishedRootRadius
+        + arcRadius * tangentOffsetFactor;
+    const double rootCircleCenterRadius = finishedRootRadius + arcRadius;
+    const double hiddenTailRadius = sharpRootRadius
+        + std::tan(Base::toRadians(62.5)) * marginZ;
+
+    if (hiddenTailRadius >= finishedRootRadius - Precision::Confusion()) {
+        throw Base::ValueError(QT_TRANSLATE_NOOP(
+            "Exception",
+            "Whitworth thread profile has no room for root overlap"
+        ));
+    }
+
+    const auto profilePoint = [&xDir, &zDir](double radius, double axial) {
+        return toPnt(radius * xDir + axial * zDir);
+    };
+
+    // The root circle is split at the pitch boundary.  Compute an intermediate
+    // point for each half so GC_MakeArcOfCircle selects the intended short arc.
+    const double rootTangentAngle = std::atan2(
+        pitch / 8.0,
+        rootTangentRadius - rootCircleCenterRadius
+    );
+    const double lowerRootMidAngle = (std::numbers::pi + rootTangentAngle) / 2.0;
+    const double upperRootMidAngle = -lowerRootMidAngle;
+    const auto rootArcPoint = [&](double centerAxial, double angle) {
+        return profilePoint(
+            rootCircleCenterRadius + arcRadius * std::cos(angle),
+            centerAxial + arcRadius * std::sin(angle)
+        );
+    };
+
+    const gp_Pnt rootStart = profilePoint(finishedRootRadius, 0.0);
+    const gp_Pnt lowerRootMid = rootArcPoint(0.0, lowerRootMidAngle);
+    const gp_Pnt lowerRootTangent = profilePoint(rootTangentRadius, pitch / 8.0);
+    const gp_Pnt lowerCrestTangent = profilePoint(
+        crestTangentRadius,
+        3.0 * pitch / 8.0
+    );
+    const gp_Pnt crest = profilePoint(majorRadius, pitch / 2.0);
+    const gp_Pnt upperCrestTangent = profilePoint(
+        crestTangentRadius,
+        5.0 * pitch / 8.0
+    );
+    const gp_Pnt upperRootTangent = profilePoint(rootTangentRadius, 7.0 * pitch / 8.0);
+    const gp_Pnt upperRootMid = rootArcPoint(pitch, upperRootMidAngle);
+    const gp_Pnt rootEnd = profilePoint(finishedRootRadius, pitch);
+    const gp_Pnt hiddenTailEnd = profilePoint(hiddenTailRadius, pitch);
+    const gp_Pnt hiddenTailStart = profilePoint(hiddenTailRadius, 0.0);
+
+    BRepBuilderAPI_MakeWire wireBuilder;
+    const Handle(Geom_TrimmedCurve) lowerRootArc =
+        GC_MakeArcOfCircle(rootStart, lowerRootMid, lowerRootTangent).Value();
+    wireBuilder.Add(BRepBuilderAPI_MakeEdge(lowerRootArc).Edge());
+    wireBuilder.Add(BRepBuilderAPI_MakeEdge(lowerRootTangent, lowerCrestTangent).Edge());
+
+    const Handle(Geom_TrimmedCurve) crestArc =
+        GC_MakeArcOfCircle(lowerCrestTangent, crest, upperCrestTangent).Value();
+    wireBuilder.Add(BRepBuilderAPI_MakeEdge(crestArc).Edge());
+    wireBuilder.Add(BRepBuilderAPI_MakeEdge(upperCrestTangent, upperRootTangent).Edge());
+
+    const Handle(Geom_TrimmedCurve) upperRootArc =
+        GC_MakeArcOfCircle(upperRootTangent, upperRootMid, rootEnd).Value();
+    wireBuilder.Add(BRepBuilderAPI_MakeEdge(upperRootArc).Edge());
+
+    // Close the profile through the hidden tail.  This gives the helix a real
+    // volumetric overlap with the supporting cylinder without clipping the root arc.
+    wireBuilder.Add(BRepBuilderAPI_MakeEdge(rootEnd, hiddenTailEnd).Edge());
+    wireBuilder.Add(BRepBuilderAPI_MakeEdge(hiddenTailEnd, hiddenTailStart).Edge());
+    wireBuilder.Add(BRepBuilderAPI_MakeEdge(hiddenTailStart, rootStart).Edge());
+    wireBuilder.Build();
+
+    if (!wireBuilder.IsDone()) {
+        throw Base::CADKernelError(QT_TRANSLATE_NOOP(
+            "Exception",
+            "Extended Whitworth thread profile could not be built"
+        ));
+    }
+
+    Part::TopoShape profile(wireBuilder.Wire());
+    if (!profile.isValid() || !profile.isClosed()) {
+        throw Base::CADKernelError(QT_TRANSLATE_NOOP(
+            "Exception",
+            "Extended Whitworth thread profile is invalid"
+        ));
+    }
+
+    return profile;
+}
+
+double ThreadUtils::calculateThreadEndTrim(
+    const TopoDS_Wire& normalizedProfile,
+    double pitch
+)
+{
+    constexpr double preferredPhase = 1.0 / 8.0;
+    constexpr double halfPeriod = 0.5;
+
+    if (pitch <= Precision::Confusion()) {
+        throw Base::ValueError(
+            QT_TRANSLATE_NOOP("Exception", "Thread pitch must be greater than zero")
+        );
+    }
+    if (normalizedProfile.IsNull()) {
+        throw Base::ValueError(
+            QT_TRANSLATE_NOOP("Exception", "Thread profile must not be null")
+        );
+    }
+
+    const Part::TopoShape profile(normalizedProfile);
+    if (!profile.isValid() || !profile.isClosed()) {
+        throw Base::ValueError(
+            QT_TRANSLATE_NOOP("Exception", "Thread profile must be a valid closed wire")
+        );
+    }
+
+    const Base::BoundBox3d bounds = profile.getBoundBox();
+    const double normalizedTolerance = std::max(
+        threadDefinitionTolerance,
+        Precision::Confusion() / pitch
+    );
+    if (std::abs(bounds.MinZ) > normalizedTolerance
+        || std::abs(bounds.MaxZ) > normalizedTolerance
+        || bounds.MinY < -normalizedTolerance
+        || bounds.MaxY > 1.0 + normalizedTolerance) {
+        throw Base::ValueError(QT_TRANSLATE_NOOP(
+            "Exception",
+            "Thread profile must be normalized in the XY plane with Y in the range 0..1"
+        ));
+    }
+
+    // Every edge endpoint is a geometric transition in the profile.  Trimming at one of
+    // these phases can expose a tangent junction or a corner at the end of the swept solid.
+    std::vector<double> criticalPhases {0.0, halfPeriod, 1.0};
+    for (BRepTools_WireExplorer explorer(normalizedProfile); explorer.More(); explorer.Next()) {
+        const BRepAdaptor_Curve curve(explorer.Current());
+        const double firstY = curve.Value(curve.FirstParameter()).Y();
+        const double lastY = curve.Value(curve.LastParameter()).Y();
+        criticalPhases.push_back(std::clamp(firstY, 0.0, 1.0));
+        criticalPhases.push_back(std::clamp(lastY, 0.0, 1.0));
+    }
+
+    std::sort(criticalPhases.begin(), criticalPhases.end());
+    criticalPhases.erase(
+        std::unique(
+            criticalPhases.begin(),
+            criticalPhases.end(),
+            [normalizedTolerance](double lhs, double rhs) {
+                return std::abs(lhs - rhs) <= normalizedTolerance;
+            }
+        ),
+        criticalPhases.end()
+    );
+
+    // Fold transitions from the upper half into the lower half.  A trim phase t always
+    // has the matching end at 1-t, so both ends must participate in the interval search.
+    std::vector<double> trimTransitions {0.0, halfPeriod};
+    for (const double criticalPhase : criticalPhases) {
+        trimTransitions.push_back(std::min(criticalPhase, 1.0 - criticalPhase));
+    }
+    std::sort(trimTransitions.begin(), trimTransitions.end());
+    trimTransitions.erase(
+        std::unique(
+            trimTransitions.begin(),
+            trimTransitions.end(),
+            [normalizedTolerance](double lhs, double rhs) {
+                return std::abs(lhs - rhs) <= normalizedTolerance;
+            }
+        ),
+        trimTransitions.end()
+    );
+
+    const auto distanceToTransition = [&trimTransitions](double phase) {
+        double distance = std::numeric_limits<double>::max();
+        for (const double criticalPhase : trimTransitions) {
+            distance = std::min(distance, std::abs(phase - criticalPhase));
+        }
+        return distance;
+    };
+    const auto isSafe = [&](double phase) {
+        const double mirroredPhase = 1.0 - phase;
+        return phase > bounds.MinY + normalizedTolerance
+            && phase < halfPeriod - normalizedTolerance
+            && mirroredPhase < bounds.MaxY - normalizedTolerance
+            && distanceToTransition(phase) > normalizedTolerance;
+    };
+
+    if (isSafe(preferredPhase)) {
+        return preferredPhase * pitch;
+    }
+
+    double bestPhase = 0.0;
+    double bestClearance = -1.0;
+    for (size_t index = 1; index < trimTransitions.size(); ++index) {
+        const double intervalStart = trimTransitions[index - 1];
+        const double intervalEnd = trimTransitions[index];
+        if (intervalEnd - intervalStart <= 2.0 * normalizedTolerance) {
+            continue;
+        }
+
+        const double candidate = (intervalStart + intervalEnd) / 2.0;
+        if (!isSafe(candidate)) {
+            continue;
+        }
+
+        const double clearance = distanceToTransition(candidate);
+        const bool hasMoreClearance = clearance > bestClearance + normalizedTolerance;
+        const bool isCloserToPreferred = std::abs(clearance - bestClearance)
+                <= normalizedTolerance
+            && std::abs(candidate - preferredPhase) < std::abs(bestPhase - preferredPhase);
+        if (hasMoreClearance || isCloserToPreferred) {
+            bestPhase = candidate;
+            bestClearance = clearance;
+        }
+    }
+
+    if (bestClearance < 0.0) {
+        throw Base::ValueError(QT_TRANSLATE_NOOP(
+            "Exception",
+            "Thread profile has no safe symmetric trimming phase"
+        ));
+    }
+
+    return bestPhase * pitch;
+}
+
+double ThreadUtils::getThreadEndTrim(
+    int threadType,
+    int sizeIndex,
+    int pitchIndex,
+    bool isInternalThread
+) const
+{
+    const ResolvedThreadSelection selection = resolveThreadSelection(
+        threadType,
+        sizeIndex,
+        pitchIndex
+    );
+    const ThreadDefinition& definition = *selection.definition;
+
+    const ThreadDefinition::Profile* selectedProfile = nullptr;
+    if (!isInternalThread
+        && definition.externalProfileStatus == ThreadDefinition::ProfileStatus::Valid
+        && definition.externalProfile) {
+        selectedProfile = &*definition.externalProfile;
+    }
+    else if (definition.profileStatus == ThreadDefinition::ProfileStatus::Valid
+             && definition.profile) {
+        selectedProfile = &*definition.profile;
+    }
+
+    if (selectedProfile) {
+        return calculateThreadEndTrim(
+            TopoDS::Wire(selectedProfile->wire.getShape()),
+            selection.pitch
+        );
+    }
+
+    // Build the same fallback profile selected by makeThread(), but normalized to one pitch.
+    // Its absolute radius is irrelevant here; only the axial phases of its edges are inspected.
+    constexpr double normalizedPitch = 1.0;
+    constexpr double normalizedMajorRadius = 2.0;
+    const gp_Vec radialDirection(1.0, 0.0, 0.0);
+    const gp_Vec axialDirection(0.0, 1.0, 0.0);
+
+    Part::TopoShape normalizedProfile;
+    if (useExtendedWhitworthRoot && isWhitworthThread(definition.id)) {
+        normalizedProfile = makeExtendedWhitworthThreadProfile(
+            normalizedMajorRadius,
+            normalizedPitch,
+            radialDirection,
+            axialDirection
+        );
+    }
+    else {
+        normalizedProfile = makeLegacyThreadProfile(
+            definition.id,
+            normalizedMajorRadius,
+            normalizedPitch,
+            radialDirection,
+            axialDirection
+        );
+    }
+
+    return calculateThreadEndTrim(
+        TopoDS::Wire(normalizedProfile.getShape()),
+        selection.pitch
+    );
+}
+
 
 TopoDS_Shape ThreadUtils::makeThread(
     const gp_Vec& xDir,
@@ -1312,13 +1629,41 @@ TopoDS_Shape ThreadUtils::makeThread(
         threadProfile = *preparedProfile;
     }
     else {
-        threadProfile = makeLegacyThreadProfile(
-            threadTypeStr,
-            RmajC,
-            Pitch,
-            xDir,
-            zDir
-        );
+        if (isWhitworthThread(threadTypeStr)) {
+            if (DEBUG) {
+                Base::Console().message(
+                    "[makeThread]: Whitworth profile variant: %s\n",
+                    useExtendedWhitworthRoot ? "extended-root" : "legacy"
+                );
+            }
+
+            if (useExtendedWhitworthRoot) {
+                threadProfile = makeExtendedWhitworthThreadProfile(
+                    RmajC,
+                    Pitch,
+                    xDir,
+                    zDir
+                );
+            }
+            else {
+                threadProfile = makeLegacyThreadProfile(
+                    threadTypeStr,
+                    RmajC,
+                    Pitch,
+                    xDir,
+                    zDir
+                );
+            }
+        }
+        else {
+            threadProfile = makeLegacyThreadProfile(
+                threadTypeStr,
+                RmajC,
+                Pitch,
+                xDir,
+                zDir
+            );
+        }
     }
     const TopoDS_Wire threadWire = TopoDS::Wire(threadProfile.getShape());
 
