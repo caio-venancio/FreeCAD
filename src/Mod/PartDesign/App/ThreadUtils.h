@@ -52,7 +52,8 @@ public:
         const bool tapered,
         const double taperedAngle,
         const bool UseCustomThreadClearance,
-        const double CustomThreadClearance
+        const double CustomThreadClearance,
+        const double farEndTrim
     );
     App::DocumentObjectExecReturn* validateParameters(const App::PropertyLinkSub& LateralFace);
     bool isInternalFace(const App::PropertyLinkSub& faceProp, const TopoDS_Shape& solid);
@@ -99,15 +100,34 @@ public:
     std::vector<gp_Pnt> findLineCurveIntersections(const gp_Lin& line, const BRepAdaptor_Curve& curve);
     std::vector<std::string> getThreadPitches(const int threadType, const int threadDiameter) const;
     double getThreadPitch(const int threadType, const int threadDiameter, const int threadPitch) const;
-    static double calculateThreadEndTrim(
+    struct NormalizedThreadSupport
+    {
+        double xAtYZero;
+        double slope;
+    };
+    struct ThreadEndTrims
+    {
+        double nearEnd;
+        double farEnd;
+    };
+    static ThreadEndTrims calculateThreadEndTrims(
         const TopoDS_Wire& normalizedProfile,
-        double pitch
+        double pitch,
+        const NormalizedThreadSupport& nearSupport,
+        const NormalizedThreadSupport& farSupport
     );
-    double getThreadEndTrim(
+    ThreadEndTrims getThreadEndTrims(
         int threadType,
         int sizeIndex,
         int pitchIndex,
-        bool isInternalThread
+        bool isInternalThread,
+        double supportDiameter,
+        double usefulThreadLength,
+        bool tapered,
+        double taperedAngle,
+        bool useCustomThreadClearance,
+        double customThreadClearance,
+        App::PropertyEnumeration& threadClass
     ) const;
     std::vector<std::string> getThreadClasses(const int threadType, const bool isInternal) const;
     std::string getThreadDesignations(

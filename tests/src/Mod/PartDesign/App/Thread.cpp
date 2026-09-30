@@ -15,6 +15,9 @@
 #include <TopoDS.hxx>
 #include <TopoDS_Face.hxx>
 #include <BRepAdaptor_Surface.hxx>
+#include <BRepBuilderAPI_MakeEdge.hxx>
+#include <BRepBuilderAPI_MakeWire.hxx>
+#include <GC_MakeArcOfCircle.hxx>
 #include <GeomAbs_SurfaceType.hxx>
 
 #include <GProp_GProps.hxx>
@@ -24,6 +27,9 @@
 
 #include <Mod/Part/App/Geometry.h>
 #include <Mod/Sketcher/App/Constraint.h>
+
+#include <cmath>
+#include <numbers>
 
 // NOLINTBEGIN(readability-magic-numbers,cppcoreguidelines-avoid-magic-numbers)
 
@@ -111,6 +117,53 @@ protected:
     static TopoDS_Wire getProfileWire(const Sketcher::SketchObject* profile)
     {
         return TopoDS::Wire(profile->Shape.getShape().getShape());
+    }
+
+    static TopoDS_Wire makeRoundedWhitworthRootProfile()
+    {
+        constexpr double height = 0.960491;
+        constexpr double radius = 0.137329;
+        constexpr double tangentOffsetFactor = 0.58284013094;
+
+        const double finishedRoot = -2.0 * height / 3.0;
+        const double rootCenter = finishedRoot + radius;
+        const double rootTangent = finishedRoot + radius * tangentOffsetFactor;
+        const double tangentAngle = std::atan2(1.0 / 8.0, rootTangent - rootCenter);
+        const double lowerMidAngle = (std::numbers::pi + tangentAngle) / 2.0;
+        const double hiddenRoot = finishedRoot - 0.1;
+
+        const auto circlePoint = [rootCenter, radius](double centerY, double angle) {
+            return gp_Pnt(
+                rootCenter + radius * std::cos(angle),
+                centerY + radius * std::sin(angle),
+                0.0
+            );
+        };
+
+        const gp_Pnt rootStart(finishedRoot, 0.0, 0.0);
+        const gp_Pnt lowerMid = circlePoint(0.0, lowerMidAngle);
+        const gp_Pnt lowerTangent(rootTangent, 1.0 / 8.0, 0.0);
+        const gp_Pnt crest(0.0, 0.5, 0.0);
+        const gp_Pnt upperTangent(rootTangent, 7.0 / 8.0, 0.0);
+        const gp_Pnt upperMid = circlePoint(1.0, -lowerMidAngle);
+        const gp_Pnt rootEnd(finishedRoot, 1.0, 0.0);
+        const gp_Pnt hiddenEnd(hiddenRoot, 1.0, 0.0);
+        const gp_Pnt hiddenStart(hiddenRoot, 0.0, 0.0);
+
+        BRepBuilderAPI_MakeWire builder;
+        builder.Add(BRepBuilderAPI_MakeEdge(
+            GC_MakeArcOfCircle(rootStart, lowerMid, lowerTangent).Value()
+        ).Edge());
+        builder.Add(BRepBuilderAPI_MakeEdge(lowerTangent, crest).Edge());
+        builder.Add(BRepBuilderAPI_MakeEdge(crest, upperTangent).Edge());
+        builder.Add(BRepBuilderAPI_MakeEdge(
+            GC_MakeArcOfCircle(upperTangent, upperMid, rootEnd).Value()
+        ).Edge());
+        builder.Add(BRepBuilderAPI_MakeEdge(rootEnd, hiddenEnd).Edge());
+        builder.Add(BRepBuilderAPI_MakeEdge(hiddenEnd, hiddenStart).Edge());
+        builder.Add(BRepBuilderAPI_MakeEdge(hiddenStart, rootStart).Edge());
+        builder.Build();
+        return builder.Wire();
     }
 
     PartDesign::Pad* createCylinderPad(double length = 30.0, double radius = 10.0)
@@ -389,7 +442,7 @@ TEST_F(ThreadTest, ThreadProfileLoaderRejectsNonNormalizedAndPlacedProfiles)
     EXPECT_TRUE(definition.profileDiagnostic.find("X = 0") != std::string::npos);
 }
 
-TEST_F(ThreadTest, ThreadEndTrimKeepsPreferredEighthPitchWhenSafe)
+TEST_F(ThreadTest, ThreadEndTrimsFollowMetricProfileSupportIntersection)
 {
     auto* profile = createThreadProfile(
         "TrimProfile",
@@ -402,37 +455,45 @@ TEST_F(ThreadTest, ThreadEndTrimKeepsPreferredEighthPitchWhenSafe)
     );
 
     constexpr double pitch = 2.0;
-    EXPECT_NEAR(
-        PartDesign::ThreadUtils::calculateThreadEndTrim(getProfileWire(profile), pitch),
-        pitch / 8.0,
-        1e-9
+    constexpr double expectedPhase = 1.0 / 8.0;
+    constexpr double supportX = -0.75
+        + 0.75 * (expectedPhase - 0.001) / (0.4375 - 0.001);
+    const PartDesign::ThreadUtils::NormalizedThreadSupport support {supportX, 0.0};
+    const auto trims = PartDesign::ThreadUtils::calculateThreadEndTrims(
+        getProfileWire(profile),
+        pitch,
+        support,
+        support
     );
+    EXPECT_NEAR(trims.nearEnd, pitch / 8.0, 1e-9);
+    EXPECT_NEAR(trims.farEnd, pitch / 8.0, 1e-9);
 }
 
-TEST_F(ThreadTest, ThreadEndTrimAvoidsWhitworthRootTangentVertices)
+TEST_F(ThreadTest, ThreadEndTrimsFollowRoundedWhitworthRootIntersection)
 {
-    auto* profile = createThreadProfile(
-        "TrimProfile",
-        {
-            Base::Vector3d(-0.8, 0.0, 0.0),
-            Base::Vector3d(-0.64, 0.125, 0.0),
-            Base::Vector3d(-0.08, 0.375, 0.0),
-            Base::Vector3d(0.0, 0.5, 0.0),
-            Base::Vector3d(-0.08, 0.625, 0.0),
-            Base::Vector3d(-0.64, 0.875, 0.0),
-            Base::Vector3d(-0.8, 1.0, 0.0),
-        }
+    constexpr double pitch = 25.4 / 11.0;
+    constexpr double radius = 0.137329 * pitch;
+    constexpr double radialOverlap = 0.005;
+    constexpr double finishedRoot = -2.0 * 0.960491 / 3.0;
+    const PartDesign::ThreadUtils::NormalizedThreadSupport support {
+        finishedRoot + radialOverlap / pitch,
+        0.0
+    };
+    const auto trims = PartDesign::ThreadUtils::calculateThreadEndTrims(
+        makeRoundedWhitworthRootProfile(),
+        pitch,
+        support,
+        support
     );
-
-    constexpr double pitch = 2.0;
-    EXPECT_NEAR(
-        PartDesign::ThreadUtils::calculateThreadEndTrim(getProfileWire(profile), pitch),
-        pitch / 4.0,
-        1e-9
+    const double expected = std::sqrt(
+        2.0 * radius * radialOverlap - radialOverlap * radialOverlap
     );
+    EXPECT_NEAR(trims.nearEnd, expected, 1e-6);
+    EXPECT_NEAR(trims.farEnd, expected, 1e-6);
+    EXPECT_NEAR(expected, 0.0561, 1e-4);
 }
 
-TEST_F(ThreadTest, ThreadEndTrimChecksBothEndsForAsymmetricProfiles)
+TEST_F(ThreadTest, ThreadEndTrimsAreIndependentForAsymmetricSupports)
 {
     auto* profile = createThreadProfile(
         "TrimProfile",
@@ -446,15 +507,63 @@ TEST_F(ThreadTest, ThreadEndTrimChecksBothEndsForAsymmetricProfiles)
     );
 
     constexpr double pitch = 2.0;
-    EXPECT_NEAR(
-        PartDesign::ThreadUtils::calculateThreadEndTrim(getProfileWire(profile), pitch),
-        0.2125 * pitch,
-        1e-9
+    constexpr double nearPhase = 0.1;
+    constexpr double farPhase = 0.8;
+    constexpr double nearSupportX = -0.75 + 0.75 * nearPhase / 0.3;
+    constexpr double farSupportX = -0.2 * (farPhase - 0.6) / (0.875 - 0.6);
+    const auto trims = PartDesign::ThreadUtils::calculateThreadEndTrims(
+        getProfileWire(profile),
+        pitch,
+        {nearSupportX, 0.0},
+        {farSupportX, 0.0}
     );
+    EXPECT_NEAR(trims.nearEnd, nearPhase * pitch, 1e-9);
+    EXPECT_NEAR(trims.farEnd, (1.0 - farPhase) * pitch, 1e-9);
 }
 
-TEST_F(ThreadTest, ThreadEndTrimRejectsInvalidInputs)
+TEST_F(ThreadTest, ThreadEndTrimsSupportTaperedIntersectionLines)
 {
+    auto* profile = createThreadProfile(
+        "TaperedTrimProfile",
+        {
+            Base::Vector3d(-0.75, 0.001, 0.0),
+            Base::Vector3d(0.0, 0.4375, 0.0),
+            Base::Vector3d(0.0, 0.5625, 0.0),
+            Base::Vector3d(-0.75, 0.999, 0.0),
+        }
+    );
+
+    constexpr double pitch = 2.0;
+    constexpr double slope = 0.05;
+    constexpr double nearPhase = 0.1;
+    constexpr double farPhase = 0.85;
+    const auto lowerProfileX = [](double phase) {
+        return -0.75 + 0.75 * (phase - 0.001) / (0.4375 - 0.001);
+    };
+    const auto upperProfileX = [](double phase) {
+        return -0.75 + 0.75 * (0.999 - phase) / (0.999 - 0.5625);
+    };
+    const auto trims = PartDesign::ThreadUtils::calculateThreadEndTrims(
+        getProfileWire(profile),
+        pitch,
+        {lowerProfileX(nearPhase) - slope * nearPhase, slope},
+        {upperProfileX(farPhase) - slope * farPhase, slope}
+    );
+    EXPECT_NEAR(trims.nearEnd, nearPhase * pitch, 1e-9);
+    EXPECT_NEAR(trims.farEnd, (1.0 - farPhase) * pitch, 1e-9);
+}
+
+TEST_F(ThreadTest, ThreadEndTrimsRejectInvalidInputs)
+{
+    auto* validProfile = createThreadProfile(
+        "ValidTrimProfile",
+        {
+            Base::Vector3d(-0.75, 0.001, 0.0),
+            Base::Vector3d(0.0, 0.4375, 0.0),
+            Base::Vector3d(0.0, 0.5625, 0.0),
+            Base::Vector3d(-0.75, 0.999, 0.0),
+        }
+    );
     auto* openProfile = createThreadProfile(
         "OpenTrimProfile",
         {
@@ -466,16 +575,36 @@ TEST_F(ThreadTest, ThreadEndTrimRejectsInvalidInputs)
         false
     );
 
+    const PartDesign::ThreadUtils::NormalizedThreadSupport support {-0.5, 0.0};
+
     EXPECT_THROW(
-        PartDesign::ThreadUtils::calculateThreadEndTrim(TopoDS_Wire(), 1.0),
+        PartDesign::ThreadUtils::calculateThreadEndTrims(
+            TopoDS_Wire(), 1.0, support, support
+        ),
         Base::ValueError
     );
     EXPECT_THROW(
-        PartDesign::ThreadUtils::calculateThreadEndTrim(getProfileWire(openProfile), 1.0),
+        PartDesign::ThreadUtils::calculateThreadEndTrims(
+            getProfileWire(openProfile), 1.0, support, support
+        ),
         Base::ValueError
     );
     EXPECT_THROW(
-        PartDesign::ThreadUtils::calculateThreadEndTrim(getProfileWire(openProfile), 0.0),
+        PartDesign::ThreadUtils::calculateThreadEndTrims(
+            getProfileWire(validProfile), 0.0, support, support
+        ),
+        Base::ValueError
+    );
+    EXPECT_THROW(
+        PartDesign::ThreadUtils::calculateThreadEndTrims(
+            getProfileWire(validProfile), 1.0, {1.0, 0.0}, {1.0, 0.0}
+        ),
+        Base::ValueError
+    );
+    EXPECT_THROW(
+        PartDesign::ThreadUtils::calculateThreadEndTrims(
+            getProfileWire(validProfile), 1.0, {-0.75, 0.0}, {-0.75, 0.0}
+        ),
         Base::ValueError
     );
 }

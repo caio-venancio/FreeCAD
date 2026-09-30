@@ -28,7 +28,10 @@
 #include <BRepBndLib.hxx>
 #include <Geom_ConicalSurface.hxx>
 #include <Geom_CylindricalSurface.hxx>
+#include <Geom_Plane.hxx>
 #include <Geom_Surface.hxx>
+#include <Geom_TrimmedCurve.hxx>
+#include <GeomAPI_IntCS.hxx>
 #include <GeomAbs_SurfaceType.hxx>
 #include <gp_Circ.hxx>
 #include <gp_Cylinder.hxx>
@@ -66,6 +69,7 @@
 #include "Feature.h"
 
 #include <algorithm>
+#include <cmath>
 #include <numbers>
 #include <limits>
 #include <iostream>
@@ -1321,12 +1325,13 @@ Part::TopoShape ThreadUtils::makeExtendedWhitworthThreadProfile(
     return profile;
 }
 
-double ThreadUtils::calculateThreadEndTrim(
+ThreadUtils::ThreadEndTrims ThreadUtils::calculateThreadEndTrims(
     const TopoDS_Wire& normalizedProfile,
-    double pitch
+    double pitch,
+    const NormalizedThreadSupport& nearSupport,
+    const NormalizedThreadSupport& farSupport
 )
 {
-    constexpr double preferredPhase = 1.0 / 8.0;
     constexpr double halfPeriod = 0.5;
 
     if (pitch <= Precision::Confusion()) {
@@ -1362,106 +1367,118 @@ double ThreadUtils::calculateThreadEndTrim(
         ));
     }
 
-    // Every edge endpoint is a geometric transition in the profile.  Trimming at one of
-    // these phases can expose a tangent junction or a corner at the end of the swept solid.
-    std::vector<double> criticalPhases {0.0, halfPeriod, 1.0};
-    for (BRepTools_WireExplorer explorer(normalizedProfile); explorer.More(); explorer.Next()) {
-        const BRepAdaptor_Curve curve(explorer.Current());
-        const double firstY = curve.Value(curve.FirstParameter()).Y();
-        const double lastY = curve.Value(curve.LastParameter()).Y();
-        criticalPhases.push_back(std::clamp(firstY, 0.0, 1.0));
-        criticalPhases.push_back(std::clamp(lastY, 0.0, 1.0));
-    }
+    const auto findIntersections = [&](const NormalizedThreadSupport& support) {
+        if (!std::isfinite(support.xAtYZero) || !std::isfinite(support.slope)) {
+            throw Base::ValueError(QT_TRANSLATE_NOOP(
+                "Exception",
+                "Thread support line contains invalid values"
+            ));
+        }
 
-    std::sort(criticalPhases.begin(), criticalPhases.end());
-    criticalPhases.erase(
-        std::unique(
-            criticalPhases.begin(),
-            criticalPhases.end(),
-            [normalizedTolerance](double lhs, double rhs) {
-                return std::abs(lhs - rhs) <= normalizedTolerance;
+        const gp_Pln supportPlane(
+            gp_Pnt(support.xAtYZero, 0.0, 0.0),
+            gp_Dir(1.0, -support.slope, 0.0)
+        );
+        const Handle(Geom_Plane) supportSurface = new Geom_Plane(supportPlane);
+        std::vector<double> phases;
+
+        for (BRepTools_WireExplorer explorer(normalizedProfile); explorer.More();
+             explorer.Next()) {
+            Standard_Real firstParameter;
+            Standard_Real lastParameter;
+            const Handle(Geom_Curve) curve = BRep_Tool::Curve(
+                explorer.Current(),
+                firstParameter,
+                lastParameter
+            );
+            if (curve.IsNull()) {
+                continue;
             }
-        ),
-        criticalPhases.end()
-    );
 
-    // Fold transitions from the upper half into the lower half.  A trim phase t always
-    // has the matching end at 1-t, so both ends must participate in the interval search.
-    std::vector<double> trimTransitions {0.0, halfPeriod};
-    for (const double criticalPhase : criticalPhases) {
-        trimTransitions.push_back(std::min(criticalPhase, 1.0 - criticalPhase));
-    }
-    std::sort(trimTransitions.begin(), trimTransitions.end());
-    trimTransitions.erase(
-        std::unique(
-            trimTransitions.begin(),
-            trimTransitions.end(),
-            [normalizedTolerance](double lhs, double rhs) {
-                return std::abs(lhs - rhs) <= normalizedTolerance;
+            const Handle(Geom_TrimmedCurve) trimmedCurve = new Geom_TrimmedCurve(
+                curve,
+                firstParameter,
+                lastParameter
+            );
+            const GeomAPI_IntCS intersections(trimmedCurve, supportSurface);
+            if (!intersections.IsDone()) {
+                throw Base::CADKernelError(QT_TRANSLATE_NOOP(
+                    "Exception",
+                    "Thread profile/support intersection failed"
+                ));
             }
-        ),
-        trimTransitions.end()
+            if (intersections.NbSegments() > 0) {
+                throw Base::ValueError(QT_TRANSLATE_NOOP(
+                    "Exception",
+                    "Thread profile is coincident with the support surface"
+                ));
+            }
+
+            for (Standard_Integer pointIndex = 1;
+                 pointIndex <= intersections.NbPoints();
+                 ++pointIndex) {
+                const gp_Pnt point = intersections.Point(pointIndex);
+                if (std::abs(point.Z()) <= normalizedTolerance
+                    && point.Y() >= -normalizedTolerance
+                    && point.Y() <= 1.0 + normalizedTolerance) {
+                    phases.push_back(std::clamp(point.Y(), 0.0, 1.0));
+                }
+            }
+        }
+
+        std::sort(phases.begin(), phases.end());
+        phases.erase(
+            std::unique(
+                phases.begin(),
+                phases.end(),
+                [normalizedTolerance](double lhs, double rhs) {
+                    return std::abs(lhs - rhs) <= normalizedTolerance;
+                }
+            ),
+            phases.end()
+        );
+        return phases;
+    };
+
+    const std::vector<double> nearIntersections = findIntersections(nearSupport);
+    const std::vector<double> farIntersections = findIntersections(farSupport);
+
+    const auto nearIt = std::find_if(
+        nearIntersections.begin(),
+        nearIntersections.end(),
+        [normalizedTolerance](double phase) {
+            return phase > normalizedTolerance && phase < halfPeriod;
+        }
     );
-
-    const auto distanceToTransition = [&trimTransitions](double phase) {
-        double distance = std::numeric_limits<double>::max();
-        for (const double criticalPhase : trimTransitions) {
-            distance = std::min(distance, std::abs(phase - criticalPhase));
+    const auto farIt = std::find_if(
+        farIntersections.rbegin(),
+        farIntersections.rend(),
+        [normalizedTolerance](double phase) {
+            return phase < 1.0 - normalizedTolerance && phase > halfPeriod;
         }
-        return distance;
-    };
-    const auto isSafe = [&](double phase) {
-        const double mirroredPhase = 1.0 - phase;
-        return phase > bounds.MinY + normalizedTolerance
-            && phase < halfPeriod - normalizedTolerance
-            && mirroredPhase < bounds.MaxY - normalizedTolerance
-            && distanceToTransition(phase) > normalizedTolerance;
-    };
-
-    if (isSafe(preferredPhase)) {
-        return preferredPhase * pitch;
-    }
-
-    double bestPhase = 0.0;
-    double bestClearance = -1.0;
-    for (size_t index = 1; index < trimTransitions.size(); ++index) {
-        const double intervalStart = trimTransitions[index - 1];
-        const double intervalEnd = trimTransitions[index];
-        if (intervalEnd - intervalStart <= 2.0 * normalizedTolerance) {
-            continue;
-        }
-
-        const double candidate = (intervalStart + intervalEnd) / 2.0;
-        if (!isSafe(candidate)) {
-            continue;
-        }
-
-        const double clearance = distanceToTransition(candidate);
-        const bool hasMoreClearance = clearance > bestClearance + normalizedTolerance;
-        const bool isCloserToPreferred = std::abs(clearance - bestClearance)
-                <= normalizedTolerance
-            && std::abs(candidate - preferredPhase) < std::abs(bestPhase - preferredPhase);
-        if (hasMoreClearance || isCloserToPreferred) {
-            bestPhase = candidate;
-            bestClearance = clearance;
-        }
-    }
-
-    if (bestClearance < 0.0) {
+    );
+    if (nearIt == nearIntersections.end() || farIt == farIntersections.rend()) {
         throw Base::ValueError(QT_TRANSLATE_NOOP(
             "Exception",
-            "Thread profile has no safe symmetric trimming phase"
+            "Thread profile does not cross the support surface at both ends"
         ));
     }
 
-    return bestPhase * pitch;
+    return {*nearIt * pitch, (1.0 - *farIt) * pitch};
 }
 
-double ThreadUtils::getThreadEndTrim(
+ThreadUtils::ThreadEndTrims ThreadUtils::getThreadEndTrims(
     int threadType,
     int sizeIndex,
     int pitchIndex,
-    bool isInternalThread
+    bool isInternalThread,
+    double supportDiameter,
+    double usefulThreadLength,
+    bool tapered,
+    double taperedAngle,
+    bool useCustomThreadClearance,
+    double customThreadClearance,
+    App::PropertyEnumeration& threadClass
 ) const
 {
     const ResolvedThreadSelection selection = resolveThreadSelection(
@@ -1482,42 +1499,75 @@ double ThreadUtils::getThreadEndTrim(
         selectedProfile = &*definition.profile;
     }
 
-    if (selectedProfile) {
-        return calculateThreadEndTrim(
-            TopoDS::Wire(selectedProfile->wire.getShape()),
-            selection.pitch
-        );
+    if (supportDiameter <= Precision::Confusion()
+        || usefulThreadLength <= Precision::Confusion()) {
+        throw Base::ValueError(QT_TRANSLATE_NOOP(
+            "Exception",
+            "Thread support diameter and useful length must be greater than zero"
+        ));
     }
 
-    // Build the same fallback profile selected by makeThread(), but normalized to one pitch.
-    // Its absolute radius is irrelevant here; only the axial phases of its edges are inspected.
-    constexpr double normalizedPitch = 1.0;
-    constexpr double normalizedMajorRadius = 2.0;
+    constexpr double referenceMajorRadius = 0.0;
     const gp_Vec radialDirection(1.0, 0.0, 0.0);
     const gp_Vec axialDirection(0.0, 1.0, 0.0);
 
     Part::TopoShape normalizedProfile;
-    if (useExtendedWhitworthRoot && isWhitworthThread(definition.id)) {
-        normalizedProfile = makeExtendedWhitworthThreadProfile(
-            normalizedMajorRadius,
-            normalizedPitch,
-            radialDirection,
-            axialDirection
-        );
+    if (selectedProfile) {
+        normalizedProfile = selectedProfile->wire;
     }
     else {
-        normalizedProfile = makeLegacyThreadProfile(
-            definition.id,
-            normalizedMajorRadius,
-            normalizedPitch,
-            radialDirection,
-            axialDirection
+        Part::TopoShape physicalProfile;
+        if (useExtendedWhitworthRoot && isWhitworthThread(definition.id)) {
+            physicalProfile = makeExtendedWhitworthThreadProfile(
+                referenceMajorRadius,
+                selection.pitch,
+                radialDirection,
+                axialDirection
+            );
+        }
+        else {
+            physicalProfile = makeLegacyThreadProfile(
+                definition.id,
+                referenceMajorRadius,
+                selection.pitch,
+                radialDirection,
+                axialDirection
+            );
+        }
+
+        gp_Trsf normalization;
+        normalization.SetScale(gp_Pnt(0.0, 0.0, 0.0), 1.0 / selection.pitch);
+        normalizedProfile.makeElementTransform(
+            physicalProfile,
+            normalization,
+            nullptr,
+            Part::CopyType::copy
         );
     }
 
-    return calculateThreadEndTrim(
+    const double clearance = useCustomThreadClearance
+        ? customThreadClearance / 2.0
+        : getThreadClassClearance(threadType, sizeIndex, threadClass) / 2.0;
+    const double correctedMajorRadius = selection.majorDiameter / 2.0
+        + (isInternalThread ? clearance : -clearance);
+    const double supportRadius = supportDiameter / 2.0;
+    const double taperSlope = tapered
+        ? std::tan(Base::toRadians(90.0 - taperedAngle))
+        : 0.0;
+    const double farSupportOffset = (supportRadius - correctedMajorRadius) / selection.pitch;
+    const double nearMajorRadius = correctedMajorRadius + usefulThreadLength * taperSlope;
+    const double nearSupportOffset = (supportRadius - nearMajorRadius) / selection.pitch;
+
+    // Profile Y grows toward +zDir, opposite to the reversed helix path. A point at
+    // phase Y is therefore carried by a guide section whose radius is larger by
+    // taperSlope * Y * pitch, which appears as a negative slope in support coordinates.
+    const NormalizedThreadSupport nearSupport {nearSupportOffset, -taperSlope};
+    const NormalizedThreadSupport farSupport {farSupportOffset, -taperSlope};
+    return calculateThreadEndTrims(
         TopoDS::Wire(normalizedProfile.getShape()),
-        selection.pitch
+        selection.pitch,
+        nearSupport,
+        farSupport
     );
 }
 
@@ -1537,7 +1587,8 @@ TopoDS_Shape ThreadUtils::makeThread(
     const bool tapered,
     const double taperedAngle,
     const bool UseCustomThreadClearance,
-    const double CustomThreadClearance
+    const double CustomThreadClearance,
+    const double farEndTrim
 )
 {
     // if (DEBUG) Base::Console().message("Rmaj: %lf | RmajC: %lf | Pitch: %lf | clearance: %lf\n", Rmaj,
@@ -1605,6 +1656,19 @@ TopoDS_Shape ThreadUtils::makeThread(
         RmajC = Rmaj + clearance;
     } else {
         RmajC = Rmaj - clearance;
+    }
+
+    if (farEndTrim < 0.0) {
+        throw Base::ValueError(QT_TRANSLATE_NOOP(
+            "Exception",
+            "Thread far-end trim must not be negative"
+        ));
+    }
+    if (tapered) {
+        const double taperSlope = std::tan(Base::toRadians(90.0 - taperedAngle));
+        const double radialExtension = farEndTrim * taperSlope;
+        Rmaj -= radialExtension;
+        RmajC -= radialExtension;
     }
     Base::Console().message("[makeThread]: RmajC: %lf\n", RmajC);
 

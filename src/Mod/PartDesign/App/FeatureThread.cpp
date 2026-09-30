@@ -307,14 +307,6 @@ App::DocumentObjectExecReturn* Thread::execute()
                 );
             }
 
-            double endTrim = threadUtils.getThreadEndTrim(
-                ThreadType.getValue(),
-                ThreadSize.getValue(),
-                ThreadSizePitch.getValue(),
-                IsInternal.getValue()
-            );
-            endTrim = 0;
-            Base::Console().message("[endTrim]: %lf\n", endTrim);
             const double usefulThreadLength = length - selectedPitch;
             if (usefulThreadLength <= Precision::Confusion()) {
                 return new App::DocumentObjectExecReturn(
@@ -324,7 +316,37 @@ App::DocumentObjectExecReturn* Thread::execute()
                     )
                 );
             }
-            const double generatedThreadLength = usefulThreadLength + 2.0 * endTrim;
+
+            std::optional<double> externalMinorDiameter;
+            double supportDiameter = diameter;
+            if (!IsInternal.getValue()) {
+                externalMinorDiameter = threadUtils.getMinorDiameter(
+                    ThreadType.getValue(),
+                    ThreadSize.getValue(),
+                    ThreadSizePitch.getValue()
+                );
+                supportDiameter = *externalMinorDiameter;
+            }
+            const ThreadUtils::ThreadEndTrims endTrims = threadUtils.getThreadEndTrims(
+                ThreadType.getValue(),
+                ThreadSize.getValue(),
+                ThreadSizePitch.getValue(),
+                IsInternal.getValue(),
+                supportDiameter,
+                usefulThreadLength,
+                Tapered.getValue(),
+                TaperedAngle.getValue(),
+                UseCustomThreadClearance.getValue(),
+                CustomThreadClearance.getValue(),
+                ThreadClass
+            );
+            Base::Console().message(
+                "[endTrim]: near=%lf far=%lf\n",
+                endTrims.nearEnd,
+                endTrims.farEnd
+            );
+            const double generatedThreadLength = usefulThreadLength
+                + endTrims.nearEnd + endTrims.farEnd;
 
             // A modelled external thread replaces the selected major-diameter surface with the
             // reduced base before fusing the thread profile.  Cosmetic threads must retain the
@@ -332,13 +354,8 @@ App::DocumentObjectExecReturn* Thread::execute()
             if (!IsInternal.getValue()) {
                 Base::Console().message("Lowering cylinder\n");
 
-                double majorDiameter = threadUtils.getLateralFaceDiameter(LateralFace);
-                double minorDiameter = threadUtils.getMinorDiameter(
-                    ThreadType.getValue(),
-                    ThreadSize.getValue(),
-                    ThreadSizePitch.getValue()
-                );
-
+                const double majorDiameter = diameter;
+                const double minorDiameter = *externalMinorDiameter;
                 Base::Console().message("minorDiameter: %lf\n", minorDiameter);
 
                 base = threadUtils.reduceExternalThreadBase(
@@ -365,19 +382,21 @@ App::DocumentObjectExecReturn* Thread::execute()
                     Tapered.getValue(),
                     TaperedAngle.getValue(),
                     UseCustomThreadClearance.getValue(),
-                    CustomThreadClearance.getValue()
+                    CustomThreadClearance.getValue(),
+                    endTrims.farEnd
             );
 
             // if(IsInternal.getValue()){
                 gp_Vec zDirUnit = zDir;
                 zDirUnit.Normalize();
                 gp_Pnt bottomPoint = startPoint.Translated(
-                    zDirUnit * (usefulThreadLength + endTrim)
+                    zDirUnit * (usefulThreadLength + endTrims.farEnd)
                 );
 
                 double projBottom = gp_Vec(nearPoint, bottomPoint).Dot(gp_Vec(axisDir));
 
-                if (projBottom > cylinderHeight - selectedPitch + endTrim + Precision::Confusion()) {
+                if (projBottom > cylinderHeight - selectedPitch + endTrims.farEnd
+                    + Precision::Confusion()) {
                     return new App::DocumentObjectExecReturn(
                         QT_TRANSLATE_NOOP("Exception", "Thread error: Thread bottom point is below the base of the cylinder face")
                     );
@@ -398,7 +417,7 @@ App::DocumentObjectExecReturn* Thread::execute()
                 );
             }
 
-            // makeThread() is deliberately extended by the profile-dependent endTrim at
+            // makeThread() is deliberately extended by the profile-dependent trims at
             // both ends. Keep only the nominal interval with a coaxial-cylinder common.
             Bnd_Box threadBounds;
             BRepBndLib::Add(thread, threadBounds);
