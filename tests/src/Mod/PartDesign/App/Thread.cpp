@@ -14,9 +14,11 @@
 #include <TopExp_Explorer.hxx>
 #include <TopoDS.hxx>
 #include <TopoDS_Face.hxx>
+#include <BRepAdaptor_Curve.hxx>
 #include <BRepAdaptor_Surface.hxx>
 #include <BRepBuilderAPI_MakeEdge.hxx>
 #include <BRepBuilderAPI_MakeWire.hxx>
+#include <BRepTools_WireExplorer.hxx>
 #include <GC_MakeArcOfCircle.hxx>
 #include <GeomAbs_SurfaceType.hxx>
 
@@ -41,6 +43,58 @@ static int findEnumIndex(const std::vector<std::string>& enums, const std::strin
         }
     }
     return -1;
+}
+
+struct ThreadShapeSignature
+{
+    double volume {0.0};
+    double surface {0.0};
+    gp_Pnt centerOfMass;
+    double xmin {0.0};
+    double ymin {0.0};
+    double zmin {0.0};
+    double xmax {0.0};
+    double ymax {0.0};
+    double zmax {0.0};
+    int faces {0};
+    int edges {0};
+    int vertices {0};
+};
+
+static ThreadShapeSignature getThreadShapeSignature(const TopoDS_Shape& shape)
+{
+    GProp_GProps volumeProperties;
+    BRepGProp::VolumeProperties(shape, volumeProperties);
+
+    GProp_GProps surfaceProperties;
+    BRepGProp::SurfaceProperties(shape, surfaceProperties);
+
+    Bnd_Box box;
+    BRepBndLib::Add(shape, box);
+
+    ThreadShapeSignature signature;
+    signature.volume = volumeProperties.Mass();
+    signature.surface = surfaceProperties.Mass();
+    signature.centerOfMass = volumeProperties.CentreOfMass();
+    box.Get(
+        signature.xmin,
+        signature.ymin,
+        signature.zmin,
+        signature.xmax,
+        signature.ymax,
+        signature.zmax
+    );
+
+    for (TopExp_Explorer explorer(shape, TopAbs_FACE); explorer.More(); explorer.Next()) {
+        ++signature.faces;
+    }
+    for (TopExp_Explorer explorer(shape, TopAbs_EDGE); explorer.More(); explorer.Next()) {
+        ++signature.edges;
+    }
+    for (TopExp_Explorer explorer(shape, TopAbs_VERTEX); explorer.More(); explorer.Next()) {
+        ++signature.vertices;
+    }
+    return signature;
 }
 
 class ThreadTest: public ::testing::Test
@@ -472,25 +526,36 @@ TEST_F(ThreadTest, ThreadEndTrimsFollowMetricProfileSupportIntersection)
 TEST_F(ThreadTest, ThreadEndTrimsFollowRoundedWhitworthRootIntersection)
 {
     constexpr double pitch = 25.4 / 11.0;
-    constexpr double radius = 0.137329 * pitch;
     constexpr double radialOverlap = 0.005;
     constexpr double finishedRoot = -2.0 * 0.960491 / 3.0;
     const PartDesign::ThreadUtils::NormalizedThreadSupport support {
         finishedRoot + radialOverlap / pitch,
         0.0
     };
+    const TopoDS_Wire profile = makeRoundedWhitworthRootProfile();
     const auto trims = PartDesign::ThreadUtils::calculateThreadEndTrims(
-        makeRoundedWhitworthRootProfile(),
+        profile,
         pitch,
         support,
         support
     );
-    const double expected = std::sqrt(
-        2.0 * radius * radialOverlap - radialOverlap * radialOverlap
-    );
+
+    BRepTools_WireExplorer explorer(profile);
+    ASSERT_TRUE(explorer.More());
+    const BRepAdaptor_Curve rootArc(explorer.Current());
+    ASSERT_EQ(rootArc.GetType(), GeomAbs_Circle);
+
+    const gp_Circ rootCircle = rootArc.Circle();
+    const double radialDistance = support.xAtYZero - rootCircle.Location().X();
+    const double intersectionTerm = rootCircle.Radius() * rootCircle.Radius()
+        - radialDistance * radialDistance;
+    ASSERT_GT(intersectionTerm, 0.0);
+
+    const double expected =
+        (rootCircle.Location().Y() + std::sqrt(intersectionTerm)) * pitch;
     EXPECT_NEAR(trims.nearEnd, expected, 1e-6);
     EXPECT_NEAR(trims.farEnd, expected, 1e-6);
-    EXPECT_NEAR(expected, 0.0561, 1e-4);
+    EXPECT_NEAR(expected, 0.0558318, 1e-6);
 }
 
 TEST_F(ThreadTest, ThreadEndTrimsAreIndependentForAsymmetricSupports)
@@ -758,39 +823,25 @@ TEST_F(ThreadTest, ExternalThreadModeledM24Signature)
     ASSERT_TRUE(thread->isValid());
 
     const TopoDS_Shape& shape = thread->Shape.getValue();
+    const ThreadShapeSignature signature = getThreadShapeSignature(shape);
 
-    GProp_GProps volProps;
-    BRepGProp::VolumeProperties(shape, volProps);
-    EXPECT_NEAR(volProps.Mass(), 9185.1339280588, 1e-3);
+    EXPECT_NEAR(signature.volume, 9185.12278706965, 1e-3);
+    EXPECT_NEAR(signature.surface, 3299.5060565756, 1e-3);
 
-    GProp_GProps surfProps;
-    BRepGProp::SurfaceProperties(shape, surfProps);
-    EXPECT_NEAR(surfProps.Mass(), 3299.5175979113, 1e-3);
+    EXPECT_NEAR(signature.centerOfMass.X(), -0.0280986964238836, 1e-3);
+    EXPECT_NEAR(signature.centerOfMass.Y(), -0.0280862441415311, 1e-3);
+    EXPECT_NEAR(signature.centerOfMass.Z(), 12.0000048858924, 1e-3);
 
-    gp_Pnt com = volProps.CentreOfMass();
-    EXPECT_NEAR(com.X(), -0.0280991554, 1e-3);
-    EXPECT_NEAR(com.Y(), -0.0280997884, 1e-3);
-    EXPECT_NEAR(com.Z(), 12.0000050577, 1e-3);
+    EXPECT_NEAR(signature.xmin, -12.0000407872795, 1e-3);
+    EXPECT_NEAR(signature.xmax, 13.0767182177214, 1e-3);
+    EXPECT_NEAR(signature.ymin, -13.4439233177845, 1e-3);
+    EXPECT_NEAR(signature.ymax, 13.4439619163563, 1e-3);
+    EXPECT_NEAR(signature.zmin, -0.374583462836048, 1e-3);
+    EXPECT_NEAR(signature.zmax, 24.3745345419815, 1e-3);
 
-    Bnd_Box box;
-    BRepBndLib::Add(shape, box);
-    double xmin, ymin, zmin, xmax, ymax, zmax;
-    box.Get(xmin, ymin, zmin, xmax, ymax, zmax);
-    
-    EXPECT_NEAR(xmin, -12.0000454873, 1e-3);
-    EXPECT_NEAR(xmax, 13.0767229177, 1e-3);
-    EXPECT_NEAR(ymin, -13.4439280178, 1e-3);
-    EXPECT_NEAR(ymax, 13.4439666164, 1e-3);
-    EXPECT_NEAR(zmin, -0.3740050000, 1e-3);
-    EXPECT_NEAR(zmax, 24.3739560982, 1e-3);
-
-    int nFaces = 0, nEdges = 0, nVertices = 0;
-    for (TopExp_Explorer e(shape, TopAbs_FACE); e.More(); e.Next()) ++nFaces;
-    for (TopExp_Explorer e(shape, TopAbs_EDGE); e.More(); e.Next()) ++nEdges;
-    for (TopExp_Explorer e(shape, TopAbs_VERTEX); e.More(); e.Next()) ++nVertices;
-    EXPECT_EQ(nFaces, 37);
-    EXPECT_EQ(nEdges, 152);
-    EXPECT_EQ(nVertices, 304);
+    EXPECT_EQ(signature.faces, 36);
+    EXPECT_EQ(signature.edges, 142);
+    EXPECT_EQ(signature.vertices, 284);
 
     EXPECT_NEAR(thread->Diameter.getValue(), 24.0, 1e-9);
     EXPECT_FALSE(thread->IsInternal.getValue());
@@ -838,128 +889,97 @@ TEST_F(ThreadTest, ExternalThreadModeledM24FineSignature)
     ASSERT_TRUE(thread->isValid());
 
     const TopoDS_Shape& shape = thread->Shape.getValue();
+    const ThreadShapeSignature signature = getThreadShapeSignature(shape);
 
-    GProp_GProps volProps;
-    BRepGProp::VolumeProperties(shape, volProps);
-    EXPECT_NEAR(volProps.Mass(), 9747.8530376664, 1e-3);
+    EXPECT_NEAR(signature.volume, 9748.04620943543, 1e-3);
+    EXPECT_NEAR(signature.surface, 3473.83683246289, 1e-3);
 
-    GProp_GProps surfProps;
-    BRepGProp::SurfaceProperties(shape, surfProps);
-    EXPECT_NEAR(surfProps.Mass(), 3473.5609671334, 1e-3);
+    EXPECT_NEAR(signature.centerOfMass.X(), -0.0123866910666811, 1e-3);
+    EXPECT_NEAR(signature.centerOfMass.Y(), -0.0126162122787606, 1e-3);
+    EXPECT_NEAR(signature.centerOfMass.Z(), 12.0000090527935, 1e-3);
 
-    gp_Pnt com = volProps.CentreOfMass();
-    EXPECT_NEAR(com.X(), -0.0123890002, 1e-3);
-    EXPECT_NEAR(com.Y(), -0.0123917224, 1e-3);
-    EXPECT_NEAR(com.Z(), 12.0000090125, 1e-3);
+    EXPECT_NEAR(signature.xmin, -12.0000267337974, 1e-3);
+    EXPECT_NEAR(signature.xmax, 13.0767083782664, 1e-3);
+    EXPECT_NEAR(signature.ymin, -13.4439239227804, 1e-3);
+    EXPECT_NEAR(signature.ymax, 13.4439410927855, 1e-3);
+    EXPECT_NEAR(signature.zmin, -0.25188685134595, 1e-3);
+    EXPECT_NEAR(signature.zmax, 24.2518534081066, 1e-3);
 
-    Bnd_Box box;
-    BRepBndLib::Add(shape, box);
-    double xmin, ymin, zmin, xmax, ymax, zmax;
-    box.Get(xmin, ymin, zmin, xmax, ymax, zmax);
-
-    EXPECT_NEAR(xmin, -12.0000267147, 1e-3);
-    EXPECT_NEAR(xmax, 13.0767083783, 1e-3);
-    EXPECT_NEAR(ymin, -13.4439239228, 1e-3);
-    EXPECT_NEAR(ymax, 13.4439410928, 1e-3);
-    EXPECT_NEAR(zmin, -0.2490001000, 1e-3);
-    EXPECT_NEAR(zmax, 24.2489667767, 1e-3);
-
-    int nFaces = 0, nEdges = 0, nVertices = 0;
-    for (TopExp_Explorer e(shape, TopAbs_FACE); e.More(); e.Next()) ++nFaces;
-    for (TopExp_Explorer e(shape, TopAbs_EDGE); e.More(); e.Next()) ++nEdges;
-    for (TopExp_Explorer e(shape, TopAbs_VERTEX); e.More(); e.Next()) ++nVertices;
-    EXPECT_EQ(nFaces, 52);
-    EXPECT_EQ(nEdges, 208);
-    EXPECT_EQ(nVertices, 416);
+    EXPECT_EQ(signature.faces, 52);
+    EXPECT_EQ(signature.edges, 206);
+    EXPECT_EQ(signature.vertices, 412);
 
     EXPECT_NEAR(thread->Diameter.getValue(), 24.0, 1e-9);
     EXPECT_FALSE(thread->IsInternal.getValue());
     EXPECT_EQ(std::string(thread->ThreadDesignation.getValue()), "M24x2.0");
 }
 
-// TEST_F(ThreadTest, ExternalThreadModeledBSPHalfInchLegacySignature)
-// {
-//     constexpr double majorDiameter = 20.955;
-//     constexpr double length = 24.0;
+TEST_F(ThreadTest, ExternalThreadModeledBSPHalfInchSignature)
+{
+    constexpr double majorDiameter = 20.955;
+    constexpr double length = 24.0;
 
-//     auto doc = getDocument();
-//     auto body = getBody();
-//     auto pad = createCylinderPad(length, majorDiameter / 2.0);
-//     ASSERT_NE(pad, nullptr);
+    auto doc = getDocument();
+    auto body = getBody();
+    auto pad = createCylinderPad(length, majorDiameter / 2.0);
+    ASSERT_NE(pad, nullptr);
 
-//     auto thread = doc->addObject<PartDesign::Thread>("Thread");
-//     body->addObject(thread);
+    auto thread = doc->addObject<PartDesign::Thread>("Thread");
+    body->addObject(thread);
 
-//     auto lateralFace = getLateralFaceName(pad);
-//     ASSERT_TRUE(lateralFace.has_value());
-//     thread->LateralFace.setValue(pad, {*lateralFace});
+    auto lateralFace = getLateralFaceName(pad);
+    ASSERT_TRUE(lateralFace.has_value());
+    thread->LateralFace.setValue(pad, {*lateralFace});
 
-//     thread->DepthType.setValue(0L);  // "Dimension"
-//     thread->Depth.setValue(length);
+    thread->DepthType.setValue(0L);  // "Dimension"
+    thread->Depth.setValue(length);
 
-//     int typeIdx = findEnumIndex(thread->ThreadType.getEnumVector(), "BSP");
-//     ASSERT_GE(typeIdx, 0) << "BSP was not found in enum";
-//     thread->ThreadType.setValue(typeIdx);
+    int typeIdx = findEnumIndex(thread->ThreadType.getEnumVector(), "BSP");
+    ASSERT_GE(typeIdx, 0) << "BSP was not found in enum";
+    thread->ThreadType.setValue(typeIdx);
 
-//     int sizeIdx = findEnumIndex(thread->ThreadSize.getEnumVector(), "20.955");
-//     ASSERT_GE(sizeIdx, 0) << "BSP 1/2 major diameter was not found in enum";
-//     thread->ThreadSize.setValue(sizeIdx);
+    int sizeIdx = findEnumIndex(thread->ThreadSize.getEnumVector(), "20.955");
+    ASSERT_GE(sizeIdx, 0) << "BSP 1/2 major diameter was not found in enum";
+    thread->ThreadSize.setValue(sizeIdx);
 
-//     int pitchIdx = findEnumIndex(thread->ThreadSizePitch.getEnumVector(), "1.814");
-//     ASSERT_GE(pitchIdx, 0) << "BSP 1/2 pitch was not found in enum";
-//     thread->ThreadSizePitch.setValue(pitchIdx);
+    int pitchIdx = findEnumIndex(thread->ThreadSizePitch.getEnumVector(), "1.814");
+    ASSERT_GE(pitchIdx, 0) << "BSP 1/2 pitch was not found in enum";
+    thread->ThreadSizePitch.setValue(pitchIdx);
 
-//     thread->UseCustomThreadClearance.setValue(true);
-//     thread->CustomThreadClearance.setValue(0.0);
-//     thread->ModelThread.setValue(true);
-//     thread->CosmeticThread.setValue(false);
+    thread->UseCustomThreadClearance.setValue(true);
+    thread->CustomThreadClearance.setValue(0.0);
+    thread->ModelThread.setValue(true);
+    thread->CosmeticThread.setValue(false);
 
-//     doc->recompute();
+    doc->recompute();
 
-//     ASSERT_FALSE(thread->isError()) << thread->getStatusString();
-//     ASSERT_TRUE(thread->isValid());
+    ASSERT_FALSE(thread->isError()) << thread->getStatusString();
+    ASSERT_TRUE(thread->isValid());
 
-//     const TopoDS_Shape& shape = thread->Shape.getValue();
+    const TopoDS_Shape& shape = thread->Shape.getValue();
+    const ThreadShapeSignature signature = getThreadShapeSignature(shape);
 
-//     GProp_GProps volProps;
-//     BRepGProp::VolumeProperties(shape, volProps);
-//     GProp_GProps surfProps;
-//     BRepGProp::SurfaceProperties(shape, surfProps);
-//     const gp_Pnt com = volProps.CentreOfMass();
+    EXPECT_NEAR(signature.volume, 7338.01619667068, 1e-3);
+    EXPECT_NEAR(signature.surface, 3018.00537029963, 1e-3);
 
-//     Bnd_Box box;
-//     BRepBndLib::Add(shape, box);
-//     double xmin, ymin, zmin, xmax, ymax, zmax;
-//     box.Get(xmin, ymin, zmin, xmax, ymax, zmax);
+    EXPECT_NEAR(signature.centerOfMass.X(), -0.0132596030688335, 1e-3);
+    EXPECT_NEAR(signature.centerOfMass.Y(), -0.0165485382413947, 1e-3);
+    EXPECT_NEAR(signature.centerOfMass.Z(), 12.0000064330152, 1e-3);
 
-//     int nFaces = 0;
-//     int nEdges = 0;
-//     int nVertices = 0;
-//     for (TopExp_Explorer e(shape, TopAbs_FACE); e.More(); e.Next()) ++nFaces;
-//     for (TopExp_Explorer e(shape, TopAbs_EDGE); e.More(); e.Next()) ++nEdges;
-//     for (TopExp_Explorer e(shape, TopAbs_VERTEX); e.More(); e.Next()) ++nVertices;
+    EXPECT_NEAR(signature.xmin, -10.5118406489529, 1e-3);
+    EXPECT_NEAR(signature.ymin, -11.7766673958061, 1e-3);
+    EXPECT_NEAR(signature.zmin, -0.0494698965083938, 1e-3);
+    EXPECT_NEAR(signature.xmax, 10.9834152303562, 1e-3);
+    EXPECT_NEAR(signature.ymax, 10.7476245833315, 1e-3);
+    EXPECT_NEAR(signature.zmax, 24.0494393526971, 1e-3);
 
-//     EXPECT_NEAR(volProps.Mass(), 7290.0134362847, 1e-3);
-//     EXPECT_NEAR(surfProps.Mass(), 3291.61701096588, 1e-3);
+    EXPECT_EQ(signature.faces, 83);
+    EXPECT_EQ(signature.edges, 334);
+    EXPECT_EQ(signature.vertices, 668);
 
-//     EXPECT_NEAR(com.X(), -0.00234325479802929, 1e-3);
-//     EXPECT_NEAR(com.Y(), -0.0380918823304115, 1e-3);
-//     EXPECT_NEAR(com.Z(), 12.000003064811, 1e-3);
-
-//     EXPECT_NEAR(xmin, -10.5118429167223, 1e-3);
-//     EXPECT_NEAR(ymin, -11.7766716237672, 1e-3);
-//     EXPECT_NEAR(zmin, -0.225755, 1e-3);
-//     EXPECT_NEAR(xmax, 10.9834194583173, 1e-3);
-//     EXPECT_NEAR(ymax, 10.7476288112927, 1e-3);
-//     EXPECT_NEAR(zmax, 24.2257219690522, 1e-3);
-
-//     EXPECT_EQ(nFaces, 57);
-//     EXPECT_EQ(nEdges, 232);
-//     EXPECT_EQ(nVertices, 464);
-
-//     EXPECT_NEAR(thread->Diameter.getValue(), majorDiameter, 1e-9);
-//     EXPECT_FALSE(thread->IsInternal.getValue());
-//     EXPECT_FALSE(shape.IsNull());
-// }
+    EXPECT_NEAR(thread->Diameter.getValue(), majorDiameter, 1e-9);
+    EXPECT_FALSE(thread->IsInternal.getValue());
+    EXPECT_FALSE(shape.IsNull());
+}
 
 // NOLINTEND(readability-magic-numbers,cppcoreguidelines-avoid-magic-numbers)
