@@ -891,7 +891,7 @@ TEST_F(ThreadTest, ExternalThreadModeledM24FineSignature)
     const TopoDS_Shape& shape = thread->Shape.getValue();
     const ThreadShapeSignature signature = getThreadShapeSignature(shape);
 
-    EXPECT_NEAR(signature.volume, 9748.04620943543, 1e-3);
+    EXPECT_NEAR(signature.volume, 9748.04740625300, 1e-3);
     EXPECT_NEAR(signature.surface, 3473.83683246289, 1e-3);
 
     EXPECT_NEAR(signature.centerOfMass.X(), -0.0123866910666811, 1e-3);

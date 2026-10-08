@@ -2522,7 +2522,7 @@ std::optional<ThreadUtils::ThreadDefinition::Profile> readThreadProfile(
         return std::nullopt;
     }
 
-    if (std::abs(bounds.MaxX) > tolerance) {
+    if (bounds.MinX > tolerance || bounds.MaxX < -tolerance) {
         status = ProfileStatus::Invalid;
         diagnostic = std::string("Object '") + objectName
             + "' must reach X = 0 at the major-radius reference";
