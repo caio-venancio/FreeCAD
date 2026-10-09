@@ -117,6 +117,7 @@ void ViewProviderThread::clearThreadTextures()
     }
     m_threadOverlays.clear();
     overlayRoot.reset();
+    m_startThreadClipper = nullptr;
     m_endThreadClipper = nullptr;
     m_textureTransform = nullptr;
 }
@@ -157,11 +158,6 @@ void ViewProviderThread::updateData(const App::Property* prop)
         }
         updateOverlay();
         if (DEBUG) Base::Console().message("exit update overlay\n");
-        return;
-    }
-    if (prop == &pcThread->ThreadDepth || prop == &pcThread->ThreadDepthType) {
-        updateThreadClipper(pcThread);
-        if (DEBUG) Base::Console().message("exit thread clipper\n");
         return;
     }
     if(prop == &pcThread->ThreadDirection) {
@@ -295,13 +291,25 @@ SoSeparator* ViewProviderThread::createThreadTextureSeparator()
         return nullptr;
     }
 
-    gp_Pnt threadOriginPnt;
-    auto threadOriginOpt = getThreadOrigin(pcThread);
-    if (!threadOriginOpt.has_value()) {
-        if (DEBUG) Base::Console().warning("[createThreadTextureSeparator]: Failed to retrieve thread origin for '%s' -> nullptr\n", pcThread->getNameInDocument());
+    // The Body rebuilds overlays after recompute. Never resolve against intermediate geometry.
+    if (pcThread->isRecomputing() || pcThread->isError()) {
         return nullptr;
     }
-    threadOriginPnt = *threadOriginOpt;
+
+    std::optional<PartDesign::Thread::ThreadExtent> extent;
+    try {
+        extent = pcThread->resolveThreadExtent();
+    }
+    catch (const Standard_Failure&) {
+        return nullptr;
+    }
+    catch (const Base::Exception&) {
+        return nullptr;
+    }
+    catch (const std::exception&) {
+        return nullptr;
+    }
+    const gp_Pnt threadOriginPnt = extent->origin;
 
     std::vector<SbVec3f> vertices;
     std::vector<SbVec3f> normals;
@@ -335,7 +343,10 @@ SoSeparator* ViewProviderThread::createThreadTextureSeparator()
     tt->value = SoTransparencyType::DELAYED_BLEND;
     threadSep->addChild(tt);
 
-    // End Clipping plane
+    // Limit the cosmetic overlay to the same nominal interval as the modelled thread.
+    m_startThreadClipper = new SoClipPlane();
+    threadSep->addChild(m_startThreadClipper);
+
     m_endThreadClipper = new SoClipPlane();
     threadSep->addChild(m_endThreadClipper);
 
@@ -385,7 +396,7 @@ SoSeparator* ViewProviderThread::createThreadTextureSeparator()
     threadSep->addChild(faces);
 
     if (DEBUG) Base::Console().message("[createThreadTextureSeparator]: Updating clipper and phase offset...\n");
-    updateThreadClipper(pcThread);
+    updateThreadClipper(extent->origin, extent->direction, extent->length);
     applyThreadPhaseOffset(pcThread);
 
     if (DEBUG) Base::Console().message("[createThreadTextureSeparator]: Successfully created thread texture separator for '%s'\n", pcThread->getNameInDocument());
@@ -422,111 +433,25 @@ void ViewProviderThread::applyThreadPhaseOffset(const PartDesign::Thread* pcThre
     m_textureTransform->translation.setValue(SbVec2f(phase, 0.0F));
 }
 
-// void ViewProviderThread::updateThreadClipper(const PartDesign::Thread* pcThread)
-// {
-//     if (!pcThread || pcThread->isRecomputing() || !m_endThreadClipper) {
-//         return;
-//     }
-//     std::string theadDepthType = pcThread->ThreadDepthType.getValueAsString();
-//     if (theadDepthType == "Hole depth") {
-//         m_endThreadClipper->on = FALSE;
-//         return;
-//     }
-//     m_endThreadClipper->on = TRUE;
-
-//     auto threadNormalOpt = getThreadNormal(pcThread);
-//     if (!threadNormalOpt.has_value()){
-//         return;
-//     }
-//     gp_Dir threadNormalAxis = *threadNormalOpt;
-
-//     auto threadOriginOpt = getThreadOrigin(pcThread);
-//     if (!threadOriginOpt.has_value()) {
-//         return;
-//     }
-//     gp_Pnt threadOriginPnt = *threadOriginOpt;
-
-//     gp_Pnt endPlanePnt = threadOriginPnt.Translated(
-//         gp_Vec(threadNormalAxis) * -pcThread->ThreadDepth.getValue()
-//     );
-
-//     SbVec3f endPlanePoint = Base::convertTo<SbVec3f>(endPlanePnt);
-//     SbVec3f endPlaneNormal = Base::convertTo<SbVec3f>(threadNormalAxis);
-
-//     // Update the end thread clipper plane
-//     m_endThreadClipper->plane.setValue(SbPlane(endPlaneNormal, endPlanePoint));
-// }
-
-void ViewProviderThread::updateThreadClipper(const PartDesign::Thread* pcThread)
+void ViewProviderThread::updateThreadClipper(
+    const gp_Pnt& origin,
+    const gp_Dir& direction,
+    double length
+)
 {
-    if (DEBUG) Base::Console().message("[updateThreadClipper]: Starting thread clipper update...\n");
-
-    if (!pcThread) {
-        if (DEBUG) Base::Console().warning("[updateThreadClipper]: Thread object is null -> Aborting\n");
+    if (!m_startThreadClipper || !m_endThreadClipper) {
         return;
     }
 
-    if (pcThread->isRecomputing()) {
-        if (DEBUG) Base::Console().message("[updateThreadClipper]: Thread is currently recomputing -> Aborting\n");
-        return;
-    }
-
-    if (!m_endThreadClipper) {
-        if (DEBUG) Base::Console().warning("[updateThreadClipper]: m_endThreadClipper is null -> Aborting\n");
-        return;
-    }
-
-    std::string theadDepthType;
-    try {
-        theadDepthType = pcThread->ThreadDepthType.getValueAsString();
-        if (DEBUG) Base::Console().message("[updateThreadClipper]: ThreadDepthType value = '%s'\n", theadDepthType.c_str());
-    }
-    catch (const std::exception& e) {
-        if (DEBUG) Base::Console().warning("[updateThreadClipper]: Failed to read ThreadDepthType enum: %s -> Disabling clipper\n", e.what());
-        m_endThreadClipper->on = FALSE;
-        return;
-    }
-    catch (...) {
-        if (DEBUG) Base::Console().warning("[updateThreadClipper]: Unknown exception while reading ThreadDepthType enum -> Disabling clipper\n");
-        m_endThreadClipper->on = FALSE;
-        return;
-    }
-
-    if (theadDepthType == "Hole depth") {
-        if (DEBUG) Base::Console().message("[updateThreadClipper]: Depth type is 'Hole depth' -> Turning clipper OFF\n");
-        m_endThreadClipper->on = FALSE;
-        return;
-    }
-
+    const gp_Pnt end = origin.Translated(gp_Vec(direction) * length);
+    m_startThreadClipper->plane.setValue(SbPlane(
+        Base::convertTo<SbVec3f>(direction), Base::convertTo<SbVec3f>(origin)
+    ));
+    m_endThreadClipper->plane.setValue(SbPlane(
+        Base::convertTo<SbVec3f>(direction.Reversed()), Base::convertTo<SbVec3f>(end)
+    ));
+    m_startThreadClipper->on = TRUE;
     m_endThreadClipper->on = TRUE;
-
-    auto threadNormalOpt = getThreadNormal(pcThread);
-    if (!threadNormalOpt.has_value()) {
-        if (DEBUG) Base::Console().warning("[updateThreadClipper]: Failed to retrieve thread normal axis -> Aborting\n");
-        return;
-    }
-    gp_Dir threadNormalAxis = *threadNormalOpt;
-
-    auto threadOriginOpt = getThreadOrigin(pcThread);
-    if (!threadOriginOpt.has_value()) {
-        if (DEBUG) Base::Console().warning("[updateThreadClipper]: Failed to retrieve thread origin -> Aborting\n");
-        return;
-    }
-    gp_Pnt threadOriginPnt = *threadOriginOpt;
-
-    double threadDepthValue = pcThread->ThreadDepth.getValue();
-    if (DEBUG) Base::Console().message("[updateThreadClipper]: Calculating clipping plane with depth = %.3f...\n", threadDepthValue);
-
-    gp_Pnt endPlanePnt = threadOriginPnt.Translated(
-        gp_Vec(threadNormalAxis) * -threadDepthValue
-    );
-
-    SbVec3f endPlanePoint = Base::convertTo<SbVec3f>(endPlanePnt);
-    SbVec3f endPlaneNormal = Base::convertTo<SbVec3f>(threadNormalAxis);
-
-    // Update the end thread clipper plane
-    m_endThreadClipper->plane.setValue(SbPlane(endPlaneNormal, endPlanePoint));
-    if (DEBUG) Base::Console().message("[updateThreadClipper]: Clipper plane updated successfully (OFF at depth limit)\n");
 }
 
 std::optional<gp_Dir> ViewProviderThread::getThreadNormal(const PartDesign::Thread* pcThread) const

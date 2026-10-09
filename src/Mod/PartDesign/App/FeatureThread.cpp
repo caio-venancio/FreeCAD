@@ -116,6 +116,65 @@ Thread::Thread()
     ADD_PROPERTY_TYPE(IsInternal, (false), "Thread", App::Prop_None, "Thread is internal");
 }
 
+Thread::ThreadExtent Thread::resolveThreadExtent()
+{
+    Part::TopoShape base = getBaseTopoShape();
+    base.setTransform(Base::Matrix4D());
+    return resolveThreadExtent(base);
+}
+
+Thread::ThreadExtent Thread::resolveThreadExtent(const Part::TopoShape& base)
+{
+    const gp_Dir direction(threadUtils.getThreadZAxis(LateralFace));
+    const gp_Pnt origin = threadUtils.getThreadStartPoint(LateralFace, StartPlane);
+    const gp_Pnt nearPoint = threadUtils.getThreadStartPoint(LateralFace, direction);
+    const gp_Pnt farPoint = threadUtils.getThreadFarPoint(LateralFace, direction);
+    const double cylinderHeight = nearPoint.Distance(farPoint);
+
+    std::string method(DepthType.getValueAsString());
+    double length = 0.0;
+
+    if (method == "Dimension") {
+        length = Depth.getValue();
+    }
+    else if (method == "UpToFirst") {
+        length = threadUtils.getUpToFirstLength(
+            LateralFace,
+            StartPlane,
+            base,
+            ThreadType.getValue(),
+            ThreadSize.getValue(),
+            IsInternal.getValue(),
+            UseCustomThreadClearance.getValue(),
+            CustomThreadClearance.getValue(),
+            ThreadClass,
+            Tapered.getValue(),
+            TaperedAngle.getValue()
+        );
+    }
+    else if (method == "ThroughAll") {
+        // length = threadUtils.getThroughAllLength(base);
+        length = cylinderHeight;
+    }
+    else if (method == "UpToGeometry") {
+        //TODO: limit UpToGeometry to not be upper than startplane
+        length = threadUtils.getUpToGeometryLength(UpToGeometry, LateralFace, StartPlane);
+    }
+    else {
+        throw Base::ValueError(
+            QT_TRANSLATE_NOOP("Exception", "Thread error: Unsupported length specification")
+        );
+    }
+
+    if (length <= 0.0) {
+        throw Base::ValueError(
+            QT_TRANSLATE_NOOP("Exception", "Thread error: Invalid Thread depth")
+        );
+    }
+
+    return {origin, direction, length};
+}
+
 App::DocumentObjectExecReturn* Thread::execute()
 {
     // AddSubShape caches the operation tool used by the preview and by transformed features.
@@ -218,14 +277,11 @@ App::DocumentObjectExecReturn* Thread::execute()
         // Diameter.setValue(nearestSize);
     // }
 
-    gp_Pnt startPoint = threadUtils.getThreadStartPoint(LateralFace, StartPlane);
-    Base::Console()
-        .message("startPoint = (%f, %f, %f)\n", startPoint.X(), startPoint.Y(), startPoint.Z());
-    // double diameter = threadUtils.getLateralFaceDiameter(LateralFace);
-    // Base::Console().message("diameter: %lf\n", diameter);
-
     try {
-        gp_Vec zDir = threadUtils.getThreadZAxis(LateralFace);
+        const ThreadExtent extent = resolveThreadExtent(base);
+        const gp_Pnt startPoint = extent.origin;
+        const double length = extent.length;
+        gp_Vec zDir(extent.direction);
         gp_Vec xDir = threadUtils.computePerpendicular(zDir);
 
         gp_Dir axisDir(zDir);
@@ -235,61 +291,22 @@ App::DocumentObjectExecReturn* Thread::execute()
 
         double projStart = gp_Vec(nearPoint, startPoint).Dot(gp_Vec(axisDir));
 
-        if (projStart < -Precision::Confusion()) {
-            return new App::DocumentObjectExecReturn(
-                QT_TRANSLATE_NOOP("Exception", "Thread error: Start point is above the top of the cylinder face")
-            );
-        }
+        // TODO: this has to go in production
+        // if (projStart < -Precision::Confusion()) {
+        //     return new App::DocumentObjectExecReturn(
+        //         QT_TRANSLATE_NOOP("Exception", "Thread error: Start point is above the top of the cylinder face")
+        //     );
+        // }
 
-        std::string method(DepthType.getValueAsString());
-        double length = 0.0;
-
-        if (method == "Dimension") {
-            length = Depth.getValue();
-        }
-        else if (method == "UpToFirst") {
-                length = threadUtils.getUpToFirstLength(
-                    LateralFace,
-                    StartPlane,
-                    base,
-                    ThreadType.getValue(),
-                    ThreadSize.getValue(),
-                    IsInternal.getValue(),
-                    UseCustomThreadClearance.getValue(),
-                    CustomThreadClearance.getValue(),
-                    ThreadClass,
-                    Tapered.getValue(),
-                    TaperedAngle.getValue()
-                );
-        }
-        else if (method == "ThroughAll") {
-            // length = threadUtils.getThroughAllLength(base);
-            length = cylinderHeight;
-        }
-        else if (method == "UpToGeometry") {
-            //TODO: limit UpToGeometry to not be upper than startplane
-            length = threadUtils.getUpToGeometryLength(UpToGeometry, LateralFace, StartPlane);
-        }
-        else {
-            return new App::DocumentObjectExecReturn(
-                QT_TRANSLATE_NOOP("Exception", "Thread error: Unsupported length specification")
-            );
-        }
-
-        if (length <= 0.0) {
-            return new App::DocumentObjectExecReturn(
-                QT_TRANSLATE_NOOP("Exception", "Thread error: Invalid Thread depth")
-            );
-        }
-        
         Base::Console().message("cylinderHeight: %lf\n", cylinderHeight);
         Base::Console().message("length: %lf\n", length);
 
-        if (length > cylinderHeight) {
-            return new App::DocumentObjectExecReturn(
-                QT_TRANSLATE_NOOP("Exception", "Thread error: Thread depth greater than cylinder height")
-            );
-        }
+        // TODO: this has to go to production
+        // if (length > cylinderHeight) {
+        //     return new App::DocumentObjectExecReturn(
+        //         QT_TRANSLATE_NOOP("Exception", "Thread error: Thread depth greater than cylinder height")
+        //     );
+        // }
 
         // this->Shape.setValue(base);
         // return App::DocumentObject::StdReturn;
@@ -395,12 +412,13 @@ App::DocumentObjectExecReturn* Thread::execute()
 
                 double projBottom = gp_Vec(nearPoint, bottomPoint).Dot(gp_Vec(axisDir));
 
-                if (projBottom > cylinderHeight - selectedPitch + endTrims.farEnd
-                    + Precision::Confusion()) {
-                    return new App::DocumentObjectExecReturn(
-                        QT_TRANSLATE_NOOP("Exception", "Thread error: Thread bottom point is below the base of the cylinder face")
-                    );
-                }
+                // TODO: this has to go in production
+                // if (projBottom > cylinderHeight - selectedPitch + endTrims.farEnd
+                //     + Precision::Confusion()) {
+                //     return new App::DocumentObjectExecReturn(
+                //         QT_TRANSLATE_NOOP("Exception", "Thread error: Thread bottom point is below the base of the cylinder face")
+                //     );
+                // }
                 
                 // gp_Pnt axisOrigin = threadUtils.getThreadAxisOrigin(LateralFace); // It's going to be used in getthreadstart
                 Base::Console().message("bottomPoint = (%f, %f, %f)\n",

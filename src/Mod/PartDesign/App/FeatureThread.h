@@ -28,6 +28,9 @@
 #include <App/PropertyStandard.h>
 #include <App/PropertyUnits.h>
 
+#include <gp_Dir.hxx>
+#include <gp_Pnt.hxx>
+
 #include "FeatureDressUp.h"
 #include "ThreadUtils.h"
 
@@ -86,6 +89,17 @@ public:
     }
     //@}
 
+    struct ThreadExtent
+    {
+        gp_Pnt origin;
+        gp_Dir direction;
+        double length;
+    };
+
+    /// Resolve the nominal thread interval, including StartPlane and DepthType.
+    /// Throws when the selected geometry or length specification is invalid.
+    ThreadExtent resolveThreadExtent();
+
     Base::Vector3d guessNormalDirection() const;
     std::vector<gp_Pnt> getThreadLocations() const;
     double getThreadPitch() const;
@@ -98,6 +112,7 @@ protected:
     void updatePreviewShape() override;
     
 private:
+    ThreadExtent resolveThreadExtent(const Part::TopoShape& base);
     ThreadUtils threadUtils;
     Part::TopoShape reducedBasePreviewShape;
     void addThreadType();

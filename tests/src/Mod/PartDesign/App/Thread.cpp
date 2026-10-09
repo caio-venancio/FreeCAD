@@ -18,6 +18,9 @@
 #include <BRepAdaptor_Surface.hxx>
 #include <BRepBuilderAPI_MakeEdge.hxx>
 #include <BRepBuilderAPI_MakeWire.hxx>
+#include <BRepBuilderAPI_MakeVertex.hxx>
+#include <BRepPrimAPI_MakeCylinder.hxx>
+#include <gp_Ax2.hxx>
 #include <BRepTools_WireExplorer.hxx>
 #include <GC_MakeArcOfCircle.hxx>
 #include <GeomAbs_SurfaceType.hxx>
@@ -218,6 +221,49 @@ protected:
         builder.Add(BRepBuilderAPI_MakeEdge(hiddenStart, rootStart).Edge());
         builder.Build();
         return builder.Wire();
+    }
+
+    PartDesign::Thread* createExtentThread(const gp_Dir& direction = gp_Dir(0.0, 0.0, 1.0))
+    {
+        auto* base = _doc->addObject<PartDesign::Feature>("Base");
+        _body->addObject(base);
+        base->Shape.setValue(BRepPrimAPI_MakeCylinder(
+            gp_Ax2(gp_Pnt(2.0, 3.0, 4.0), direction), 12.0, 30.0
+        ).Shape());
+        auto* thread = _doc->addObject<PartDesign::Thread>("Thread");
+        _body->addObject(thread);
+        thread->BaseFeature.setValue(base);
+        for (TopExp_Explorer explorer(base->Shape.getValue(), TopAbs_FACE);
+             explorer.More(); explorer.Next()) {
+            const auto face = TopoDS::Face(explorer.Current());
+            if (BRepAdaptor_Surface(face).GetType() == GeomAbs_Cylinder) {
+                thread->LateralFace.setValue(
+                    base, {"Face" + std::to_string(base->Shape.getShape().findShape(face))}
+                );
+                break;
+            }
+        }
+        const int type = findEnumIndex(thread->ThreadType.getEnumVector(), "ISOMetricProfile");
+        if (type < 0) {
+            return nullptr;
+        }
+        thread->ThreadType.setValue(type);
+        const int size = findEnumIndex(thread->ThreadSize.getEnumVector(), "24");
+        if (size < 0) {
+            return nullptr;
+        }
+        thread->ThreadSize.setValue(size);
+        thread->UseCustomThreadClearance.setValue(true);
+        thread->CustomThreadClearance.setValue(0.0);
+        thread->ModelThread.setValue(false);
+        return thread;
+    }
+
+    PartDesign::Feature* createExtentPoint(const char* name, const gp_Pnt& point)
+    {
+        auto* feature = _doc->addObject<PartDesign::Feature>(name);
+        feature->Shape.setValue(BRepBuilderAPI_MakeVertex(point).Shape());
+        return feature;
     }
 
     PartDesign::Pad* createCylinderPad(double length = 30.0, double radius = 10.0)
@@ -672,6 +718,82 @@ TEST_F(ThreadTest, ThreadEndTrimsRejectInvalidInputs)
         ),
         Base::ValueError
     );
+}
+
+TEST_F(ThreadTest, ThreadExtentDimensionAndThroughAllRespectStartPlane)
+{
+    auto* thread = createExtentThread();
+    ASSERT_NE(thread, nullptr);
+    auto* start = createExtentPoint("Start", gp_Pnt(2.0, 3.0, 9.0));
+    thread->StartPlane.setValue(start, {"Vertex1"});
+    thread->DepthType.setValue("Dimension");
+    thread->Depth.setValue(8.0);
+
+    const auto dimension = thread->resolveThreadExtent();
+    EXPECT_NEAR(dimension.origin.Distance(gp_Pnt(2.0, 3.0, 9.0)), 0.0, 1e-7);
+    EXPECT_NEAR(dimension.direction.Dot(gp_Dir(0.0, 0.0, 1.0)), 1.0, 1e-7);
+    EXPECT_NEAR(dimension.length, 8.0, 1e-7);
+
+    thread->DepthType.setValue("ThroughAll");
+    const auto throughAll = thread->resolveThreadExtent();
+    EXPECT_NEAR(throughAll.origin.Distance(dimension.origin), 0.0, 1e-7);
+    // Preserve the full face height even with an offset start.
+    EXPECT_NEAR(throughAll.length, 30.0, 1e-7);
+}
+
+TEST_F(ThreadTest, ThreadExtentUpToGeometryTracksReferencesOnRotatedAxis)
+{
+    const gp_Dir direction(1.0, 1.0, 0.0);
+    auto* thread = createExtentThread(direction);
+    ASSERT_NE(thread, nullptr);
+    const gp_Pnt origin(2.0, 3.0, 4.0);
+    const gp_Pnt startPoint = origin.Translated(gp_Vec(direction) * 5.0);
+    auto* start = createExtentPoint("Start", startPoint);
+    auto* end = createExtentPoint("End", origin.Translated(gp_Vec(direction) * 17.0));
+    thread->StartPlane.setValue(start, {"Vertex1"});
+    thread->UpToGeometry.setValue(end, {"Vertex1"});
+    thread->DepthType.setValue("UpToGeometry");
+
+    const auto extent = thread->resolveThreadExtent();
+    EXPECT_NEAR(extent.origin.Distance(startPoint), 0.0, 1e-7);
+    EXPECT_NEAR(extent.direction.Dot(direction), 1.0, 1e-7);
+    EXPECT_NEAR(extent.length, 12.0, 1e-7);
+
+    end->Shape.setValue(BRepBuilderAPI_MakeVertex(
+        origin.Translated(gp_Vec(direction) * 20.0)
+    ).Shape());
+    EXPECT_NEAR(thread->resolveThreadExtent().length, 15.0, 1e-7);
+    thread->UpToGeometry.setValue(nullptr);
+    EXPECT_NEAR(thread->resolveThreadExtent().length, 25.0, 1e-7);
+}
+
+TEST_F(ThreadTest, ThreadExtentUpToFirstUsesBaseAndOffsetStart)
+{
+    auto* thread = createExtentThread();
+    ASSERT_NE(thread, nullptr);
+    auto* start = createExtentPoint("Start", gp_Pnt(2.0, 3.0, 9.0));
+    thread->StartPlane.setValue(start, {"Vertex1"});
+    thread->DepthType.setValue("UpToFirst");
+    const auto extent = thread->resolveThreadExtent();
+    EXPECT_NEAR(extent.origin.Distance(gp_Pnt(2.0, 3.0, 9.0)), 0.0, 1e-7);
+    EXPECT_NEAR(extent.length, 25.0, 1e-7);
+}
+
+TEST_F(ThreadTest, ThreadExtentInvalidDepthRecoversAfterCorrection)
+{
+    auto* thread = createExtentThread();
+    ASSERT_NE(thread, nullptr);
+    thread->DepthType.setValue("Dimension");
+    thread->Depth.setValue(0.0);
+    EXPECT_THROW(thread->resolveThreadExtent(), Base::ValueError);
+    getDocument()->recompute();
+    EXPECT_TRUE(thread->isError());
+
+    thread->Depth.setValue(10.0);
+    getDocument()->recompute();
+    EXPECT_FALSE(thread->isError()) << thread->getStatusString();
+    EXPECT_NEAR(thread->resolveThreadExtent().length, 10.0, 1e-7);
+    EXPECT_FALSE(thread->Shape.getShape().isNull());
 }
 
 TEST_F(ThreadTest, ThreadCreationOnCylinder)

@@ -64,6 +64,7 @@ class PartDesignGuiExport ViewProviderThread: public ViewProviderDressUp
 {
     PROPERTY_HEADER_WITH_OVERRIDE(PartDesignGui::ViewProviderThread);
 
+    SoClipPlane* m_startThreadClipper {nullptr};
     SoClipPlane* m_endThreadClipper {nullptr};
     SoTexture2Transform* m_textureTransform {nullptr};
 
@@ -109,7 +110,7 @@ private:
     std::vector<gp_Pnt> getThreadLocations(const PartDesign::Thread* pcThread) const;
     App::Material getGlobalMaterial();
     TopoDS_Shape getCurrentlyVisibleShape(const PartDesign::Thread* pcThread) const;
-    void updateThreadClipper(const PartDesign::Thread* pcThread);
+    void updateThreadClipper(const gp_Pnt& origin, const gp_Dir& direction, double length);
     void updateThreadDirection(const PartDesign::Thread* pcThread);
     void applyThreadPhaseOffset(const PartDesign::Thread* pcThread);
 
