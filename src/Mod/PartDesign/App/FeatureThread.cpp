@@ -251,6 +251,7 @@ Thread::ThreadExtent Thread::resolveThreadExtent(const Part::TopoShape& base)
             base,
             ThreadType.getValue(),
             ThreadSize.getValue(),
+            ThreadSizePitch.getValue(),
             IsInternal.getValue(),
             UseCustomThreadClearance.getValue(),
             CustomThreadClearance.getValue(),

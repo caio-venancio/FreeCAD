@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: LGPL-2.1-or-later
 
+#include <algorithm>
 #include <cmath>
 #include <numbers>
 
@@ -958,6 +959,64 @@ TEST_F(ThreadTest, ExternalThreadModeledBSPHalfInchSignature)
     EXPECT_NEAR(thread->Diameter.getValue(), majorDiameter, 1e-9);
     EXPECT_FALSE(thread->IsInternal.getValue());
     EXPECT_FALSE(shape.IsNull());
+}
+
+TEST_F(ThreadTest, ThreadClassGClearanceUsesSelectedPitch)
+{
+    // ISO fine M20x2: the class G deviation of ISO 965-1 for pitch 2 is 0.038 mm. Pitch 1.25
+    // (0.028 mm) belongs to another row of the legacy table and must not be used.
+    constexpr double length = 6.0;
+    constexpr double expectedClearance = 0.038;
+    constexpr double otherPitchClearance = 0.028;
+
+    auto doc = getDocument();
+    auto body = getBody();
+    auto pad = createCylinderPad(length, 10.0);
+    ASSERT_NE(pad, nullptr);
+
+    auto thread = doc->addObject<PartDesign::Thread>("Thread");
+    body->addObject(thread);
+    auto lateralFace = getLateralFaceName(pad);
+    ASSERT_TRUE(lateralFace.has_value());
+    thread->LateralFace.setValue(pad, {*lateralFace});
+    thread->DepthType.setValue("Dimension");
+    thread->Depth.setValue(length);
+
+    const auto exactIndex = [](const std::vector<std::string>& enums, const std::string& value) {
+        const auto found = std::find(enums.begin(), enums.end(), value);
+        return found == enums.end() ? -1 : static_cast<int>(found - enums.begin());
+    };
+    const int typeIdx = exactIndex(thread->ThreadType.getEnumVector(), "ISOMetricFineProfile");
+    ASSERT_GE(typeIdx, 0);
+    thread->ThreadType.setValue(typeIdx);
+    const int sizeIdx = exactIndex(thread->ThreadSize.getEnumVector(), "20 mm");
+    ASSERT_GE(sizeIdx, 0);
+    thread->ThreadSize.setValue(sizeIdx);
+    const int pitchIdx = exactIndex(thread->ThreadSizePitch.getEnumVector(), "2 mm");
+    ASSERT_GE(pitchIdx, 0);
+    thread->ThreadSizePitch.setValue(pitchIdx);
+    const int classIdx = exactIndex(thread->ThreadClass.getEnumVector(), "6g");
+    ASSERT_GE(classIdx, 0);
+    thread->ThreadClass.setValue(classIdx);
+    thread->ModelThread.setValue(true);
+    thread->CosmeticThread.setValue(false);
+
+    const auto volumeWith = [&](bool useCustom, double customClearance) {
+        thread->UseCustomThreadClearance.setValue(useCustom);
+        thread->CustomThreadClearance.setValue(customClearance);
+        doc->recompute();
+        EXPECT_FALSE(thread->isError()) << thread->getStatusString();
+        GProp_GProps properties;
+        BRepGProp::VolumeProperties(thread->Shape.getValue(), properties);
+        return properties.Mass();
+    };
+
+    const double classVolume = volumeWith(false, 0.0);
+    const double expectedVolume = volumeWith(true, expectedClearance);
+    const double otherPitchVolume = volumeWith(true, otherPitchClearance);
+
+    EXPECT_NEAR(classVolume, expectedVolume, 1e-6 * expectedVolume);
+    EXPECT_GT(std::abs(expectedVolume - otherPitchVolume), 0.1);
 }
 
 // NOLINTEND(readability-magic-numbers,cppcoreguidelines-avoid-magic-numbers)

@@ -219,17 +219,18 @@ const std::vector<ThreadUtils::ThreadDescription> ThreadUtils::threadDescription
      {"M22x2.0", 22.0, 2.00, 20.00},   {"M24x1.0", 24.0, 1.00, 23.00},
      {"M24x1.5", 24.0, 1.50, 22.50},   {"M24x2.0", 24.0, 2.00, 22.00},
      {"M25x1.0", 25.0, 1.00, 24.00},   {"M25x1.5", 25.0, 1.50, 23.50},
-     {"M25x2.0", 25.0, 2.00, 23.00},   {"M27x1.0", 27.0, 1.00, 26.00},
-     {"M27x1.5", 27.0, 1.50, 25.50},   {"M27x2.0", 27.0, 2.00, 25.00},
-     {"M28x1.0", 28.0, 1.00, 27.00},   {"M28x1.5", 28.0, 1.50, 26.50},
-     {"M28x2.0", 28.0, 2.00, 26.00},   {"M30x1.0", 30.0, 1.00, 29.00},
-     {"M30x1.5", 30.0, 1.50, 28.50},   {"M30x2.0", 30.0, 2.00, 28.00},
-     {"M30x3.0", 30.0, 3.00, 27.00},   {"M32x1.5", 32.0, 1.50, 30.50},
-     {"M32x2.0", 32.0, 2.00, 30.00},   {"M33x1.5", 33.0, 1.50, 31.50},
-     {"M33x2.0", 33.0, 2.00, 31.00},   {"M33x3.0", 33.0, 3.00, 30.00},
-     {"M35x1.5", 35.0, 1.50, 33.50},   {"M35x2.0", 35.0, 2.00, 33.00},
+     {"M25x2.0", 25.0, 2.00, 23.00},   {"M26x1.5", 27.0, 1.00, 24.50},
+     {"M27x1.0", 27.0, 1.00, 26.00},   {"M27x1.5", 27.0, 1.50, 25.50},
+     {"M27x2.0", 27.0, 2.00, 25.00},   {"M28x1.0", 28.0, 1.00, 27.00},
+     {"M28x1.5", 28.0, 1.50, 26.50},   {"M28x2.0", 28.0, 2.00, 26.00},
+     {"M30x1.0", 30.0, 1.00, 29.00},   {"M30x1.5", 30.0, 1.50, 28.50},
+     {"M30x2.0", 30.0, 2.00, 28.00},   {"M30x3.0", 30.0, 3.00, 27.00},
+     {"M32x1.5", 32.0, 1.50, 30.50},   {"M32x2.0", 32.0, 2.00, 30.00},
+     {"M33x1.5", 33.0, 1.50, 31.50},   {"M33x2.0", 33.0, 2.00, 31.00},
+     {"M33x3.0", 33.0, 3.00, 30.00},   {"M35x1.5", 35.0, 1.50, 33.50},
      {"M36x1.5", 36.0, 1.50, 34.50},   {"M36x2.0", 36.0, 2.00, 34.00},
-     {"M36x3.0", 36.0, 3.00, 33.00},   {"M39x1.5", 39.0, 1.50, 37.50},
+     {"M36x3.0", 36.0, 3.00, 33.00},   {"M38x1.5", 39.0, 1.50, 36.50},
+     {"M39x1.5", 39.0, 1.50, 37.50},
      {"M39x2.0", 39.0, 2.00, 37.00},   {"M39x3.0", 39.0, 3.00, 36.00},
      {"M40x1.5", 40.0, 1.50, 38.50},   {"M40x2.0", 40.0, 2.00, 38.00},
      {"M40x3.0", 40.0, 3.00, 37.00},   {"M42x1.5", 42.0, 1.50, 40.50},
@@ -933,21 +934,16 @@ static gp_Pnt toPnt(const gp_Vec& dir)
 
 double ThreadUtils::getThreadClassClearance(
     int threadType,
-    int threadSize,
+    int sizeIndex,
+    int pitchIndex,
     const App::PropertyEnumeration& threadClass
 ) const
 {
-    const auto& definition = checkedThreadDefinition(getThreadDefinitions(), threadType);
     const std::string className = threadClass.isValid() ? threadClass.getValueAsString() : "";
     if (className.size() < 2 || (className[1] != 'G' && className[1] != 'g')) {
         return 0.0;
     }
-    const int legacyType = threadTypeFromString(definition.name);
-    if (legacyType < 0 || static_cast<size_t>(legacyType) >= std::size(threadDescription)
-        || threadSize < 0 || static_cast<size_t>(threadSize) >= threadDescription[legacyType].size()) {
-        throw Base::IndexError(QT_TRANSLATE_NOOP("Exception", "Thread size out of range"));
-    }
-    const double pitch = threadDescription[legacyType][threadSize].pitch;
+    const double pitch = resolveThreadSelection(threadType, sizeIndex, pitchIndex).pitch;
     for (const auto& data : ThreadClass_ISOmetric_data) {
         if (pitch <= data[0]) {
             return data[1];
@@ -1362,7 +1358,7 @@ ThreadUtils::ThreadEndTrims ThreadUtils::getThreadEndTrims(
 
     const double clearance = useCustomThreadClearance
         ? customThreadClearance / 2.0
-        : getThreadClassClearance(threadType, sizeIndex, threadClass) / 2.0;
+        : getThreadClassClearance(threadType, sizeIndex, pitchIndex, threadClass) / 2.0;
     const double correctedMajorRadius = selection.majorDiameter / 2.0
         + (isInternalThread ? clearance : -clearance);
     const double supportRadius = supportDiameter / 2.0;
@@ -1446,7 +1442,7 @@ TopoDS_Shape ThreadUtils::makeThread(
         clearance = customThreadClearance / 2;
     }
     else {
-        clearance = getThreadClassClearance(threadType, threadSize, threadClass) / 2;
+        clearance = getThreadClassClearance(threadType, threadSize, threadPitch, threadClass) / 2;
     }
 
     double correctedMajorRadius;
@@ -3059,6 +3055,7 @@ double ThreadUtils::getUpToFirstLength(
     Part::TopoShape base,
     const int threadType,
     const int threadSize,
+    const int threadPitch,
     const bool isInternalThread,
     const bool useCustomThreadClearance,
     const double customThreadClearance,
@@ -3076,7 +3073,7 @@ double ThreadUtils::getUpToFirstLength(
         clearance = customThreadClearance / 2.0;
     }
     else {
-        clearance = getThreadClassClearance(threadType, threadSize, threadClass) / 2.0;
+        clearance = getThreadClassClearance(threadType, threadSize, threadPitch, threadClass) / 2.0;
     }
 
     const double correctedMajorRadius = isInternalThread ? (majorRadius + clearance)

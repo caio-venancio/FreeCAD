@@ -145,6 +145,7 @@ public:
         Part::TopoShape base,
         const int threadType,
         const int threadSize,
+        const int threadPitch,
         const bool isInternalThread,
         const bool useCustomThreadClearance,
         const double customThreadClearance,
@@ -322,9 +323,11 @@ private:
         size_t row,
         bool preferExternalProfile
     ) const;
+    /// Class G deviation (ISO 965-1) for the pitch of the selected size and pitch; zero otherwise.
     double getThreadClassClearance(
         int threadType,
-        int threadSize,
+        int sizeIndex,
+        int pitchIndex,
         const App::PropertyEnumeration& threadClass
     ) const;
     void rotateToNormal(const gp_Dir& helixAxis, const gp_Dir& normalAxis, TopoDS_Shape& helixShape) const;
