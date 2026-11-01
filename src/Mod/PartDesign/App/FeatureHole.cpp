@@ -439,13 +439,17 @@ const Hole::UTSClearanceDefinition Hole::UTSHoleDiameters[23] = {
     {"1 1/2", 39.7, 41.3, 44.0}
 };
 
-std::vector<std::string> getThreadDesignations(const int threadType)
+std::vector<std::string> getThreadDesignations(const ThreadUtils& threadUtils, const int threadType)
 {
-    std::vector<std::string> designations;
-    for (const auto& thread : Hole::threadDescription[threadType]) {
-        designations.push_back(thread.designation);
+    if (threadType <= 0) {
+        return {"---"};
     }
-    return designations;
+    const auto& definitions = threadUtils.getThreadDefinitions();
+    const size_t defIndex = static_cast<size_t>(threadType) - 1;
+    if (defIndex >= definitions.size()) {
+        return {};
+    }
+    return definitions[defIndex].designations;
 }
 
 /* ISO coarse metric enums */
@@ -527,7 +531,7 @@ Hole::Hole()
     ThreadType.setEnums(ThreadUtils::ThreadTypeEnums);
 
     ADD_PROPERTY_TYPE(ThreadSize, (0L), "Hole", App::Prop_None, "Thread size");
-    ThreadSize.setEnums(getThreadDesignations(ThreadType.getValue()));
+    ThreadSize.setEnums(getThreadDesignations(threadUtils, ThreadType.getValue()));
 
     ADD_PROPERTY_TYPE(ThreadClass, (0L), "Hole", App::Prop_None, "Thread class");
     ThreadClass.setEnums(ThreadUtils::ThreadClass_None_Enums);
@@ -924,13 +928,19 @@ double Hole::getThreadPitch() const
 {
     int threadType = ThreadType.getValue();
     int threadSize = ThreadSize.getValue();
-    if (threadType < 0) {
+    if (threadType <= 0) {
+        return 0.0;
+    }
+    const auto& definitions = threadUtils.getThreadDefinitions();
+    const size_t typeIndex = static_cast<size_t>(threadType) - 1;
+    if (typeIndex >= definitions.size()) {
         throw Base::IndexError("Thread type out of range");
     }
-    if (threadSize < 0) {
+    const auto& pitches = definitions[typeIndex].pitches;
+    if (threadSize < 0 || static_cast<size_t>(threadSize) >= pitches.size()) {
         throw Base::IndexError("Thread size out of range");
     }
-    return threadDescription[threadType][threadSize].pitch;
+    return std::stod(pitches[threadSize]);
 }
 
 void Hole::updateThreadDepthParam()
@@ -1003,8 +1013,19 @@ std::optional<double> Hole::determineDiameter() const
         return std::nullopt;
     }
 
-    double diameter = threadDescription[threadType][threadSize].diameter;
-    double pitch = threadDescription[threadType][threadSize].pitch;
+    const auto& definitions = threadUtils.getThreadDefinitions();
+    const size_t typeIndex = static_cast<size_t>(threadType) - 1;
+    if (typeIndex >= definitions.size()
+        || static_cast<size_t>(threadSize) >= definitions[typeIndex].designations.size()) {
+        if (isRestoring()) {
+            return std::nullopt;
+        }
+        throw Base::IndexError("Thread size out of range");
+    }
+    const auto& definition = definitions[typeIndex];
+    double diameter = std::stod(definition.sizes[threadSize]);
+    double pitch = std::stod(definition.pitches[threadSize]);
+    double tapDrill = std::stod(definition.tapDrills[threadSize]);
     double clearance = 0.0;
 
     if (Threaded.getValue()) {
@@ -1020,8 +1041,8 @@ std::optional<double> Hole::determineDiameter() const
 
         // use normed diameters if possible
         std::string threadTypeStr = ThreadType.getValueAsString();
-        if (threadDescription[threadType][threadSize].TapDrill > 0) {
-            diameter = threadDescription[threadType][threadSize].TapDrill + clearance;
+        if (tapDrill > 0) {
+            diameter = tapDrill + clearance;
         }  // if nothing is available, we must calculate
         else if (threadTypeStr == "BSP" || threadTypeStr == "BSW" || threadTypeStr == "BSF") {
             double thread = 2 * (0.640327 * pitch);
@@ -1174,7 +1195,12 @@ void Hole::updateDiameterParam()
     int threadType = ThreadType.getValue();
     int threadSize = ThreadSize.getValue();
     if (threadType > 0 && threadSize > 0) {
-        ThreadDiameter.setValue(threadDescription[threadType][threadSize].diameter);
+        const auto& definitions = threadUtils.getThreadDefinitions();
+        const size_t typeIndex = static_cast<size_t>(threadType) - 1;
+        if (typeIndex < definitions.size()
+            && static_cast<size_t>(threadSize) < definitions[typeIndex].sizes.size()) {
+            ThreadDiameter.setValue(std::stod(definitions[typeIndex].sizes[threadSize]));
+        }
     }
     if (auto opt = determineDiameter()) {
         Diameter.setValue(opt.value());
@@ -1190,9 +1216,13 @@ double Hole::getThreadProfileAngle()
 void Hole::findClosestDesignation()
 {
     int threadType = ThreadType.getValue();
-    const int numTypes = static_cast<int>(std::size(threadDescription));
 
-    if (threadType < 0 || threadType >= numTypes) {
+    if (threadType <= 0) {
+        return;
+    }
+    const auto& definitions = threadUtils.getThreadDefinitions();
+    const size_t typeIndex = static_cast<size_t>(threadType) - 1;
+    if (typeIndex >= definitions.size()) {
         throw Base::IndexError(QT_TRANSLATE_NOOP("Exception", "Thread type is invalid"));
     }
 
@@ -1201,8 +1231,19 @@ void Hole::findClosestDesignation()
         diameter = Diameter.getValue();
     }
 
+    struct SizeOption
+    {
+        double diameter;
+        double pitch;
+    };
+    const auto& definition = definitions[typeIndex];
+    std::vector<SizeOption> options;
+    options.reserve(definition.designations.size());
+    for (size_t row = 0; row < definition.designations.size(); ++row) {
+        options.push_back({std::stod(definition.sizes[row]), std::stod(definition.pitches[row])});
+    }
+
     int oldSizeIndex = ThreadSize.getValue();
-    const auto& options = threadDescription[threadType];
     double targetPitch = 0.0;
     if (oldSizeIndex >= 0 && oldSizeIndex < static_cast<int>(options.size())) {
         targetPitch = options[oldSizeIndex].pitch;
@@ -1243,7 +1284,7 @@ void Hole::onChanged(const App::Property* prop)
 
         if (ThreadType.isValid()) {
             type = ThreadType.getValueAsString();
-            ThreadSize.setEnums(getThreadDesignations(ThreadType.getValue()));
+            ThreadSize.setEnums(getThreadDesignations(threadUtils, ThreadType.getValue()));
             if (type != "None") {
                 findClosestDesignation();
             }
@@ -2189,7 +2230,13 @@ TopoDS_Shape Hole::makeThread(const gp_Vec& xDir, const gp_Vec& zDir, double len
     // this is the same for all metric and UTS threads as stated here:
     // https://en.wikipedia.org/wiki/File:ISO_and_UTS_Thread_Dimensions.svg
     // Rmaj is half of the major diameter
-    double Rmaj = threadDescription[threadType][threadSize].diameter / 2;
+    const auto& definitions = threadUtils.getThreadDefinitions();
+    const size_t typeIndex = static_cast<size_t>(threadType) - 1;
+    if (threadType == 0 || typeIndex >= definitions.size()
+        || static_cast<size_t>(threadSize) >= definitions[typeIndex].sizes.size()) {
+        throw Base::IndexError(QT_TRANSLATE_NOOP("Exception", "Thread size out of range"));
+    }
+    double Rmaj = std::stod(definitions[typeIndex].sizes[threadSize]) / 2;
     double Pitch = getThreadPitch();
 
     double clearance;  // clearance to be added on the diameter
