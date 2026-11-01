@@ -1,11 +1,18 @@
 # SPDX-License-Identifier: LGPL-2.1-or-later
 
+# FeatureHole.h includes nlohmann/json_fwd.hpp, as in src/Mod/PartDesign/App.
+include_directories(
+        SYSTEM
+        ${nlohmann_json_INCLUDE_DIRS}
+)
+
 add_executable(PartDesign_tests_run
         BackwardCompatibility.cpp
         DatumPlane.cpp
         ShapeBinder.cpp
         Pad.cpp
         GeoFeatureGroupExtension.cpp
+        Hole.cpp
         Thread.cpp
 )
 
