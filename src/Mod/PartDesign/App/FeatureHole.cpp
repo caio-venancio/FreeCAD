@@ -1736,7 +1736,7 @@ App::DocumentObjectExecReturn* Hole::execute()
         // Define this as zDir
         gp_Vec zDir(SketchVector.x, SketchVector.y, SketchVector.z);
         zDir.Transform(invObjLoc.Transformation());
-        gp_Vec xDir = computePerpendicular(zDir);
+        gp_Vec xDir = threadUtils.computePerpendicular(zDir);
 
         if (method == "Dimension") {
             length = Depth.getValue();
@@ -2080,66 +2080,6 @@ App::DocumentObjectExecReturn* Hole::execute()
     }
 }
 
-void Hole::rotateToNormal(const gp_Dir& helixAxis, const gp_Dir& normalAxis, TopoDS_Shape& helixShape) const
-{
-    auto getRotationAxis = [](const gp_Dir& dir1, const gp_Dir& dir2, gp_Dir& dir3, double& angle) {
-        if (dir1.IsEqual(dir2, Precision::Angular())) {
-            return false;
-        }
-
-        angle = acos(dir1 * dir2);
-        if (dir1.IsOpposite(dir2, Precision::Angular())) {
-            // Create a vector that is not parallel to dir1
-            gp_XYZ xyz(dir1.XYZ());
-            if (fabs(xyz.X()) <= fabs(xyz.Y()) && fabs(xyz.X()) <= fabs(xyz.Z())) {
-                xyz.SetX(1.0);
-            }
-            else if (fabs(xyz.Y()) <= fabs(xyz.X()) && fabs(xyz.Y()) <= fabs(xyz.Z())) {
-                xyz.SetY(1.0);
-            }
-            else {
-                xyz.SetZ(1.0);
-            }
-            dir3 = dir1.Crossed(gp_Dir(xyz));
-        }
-        else {
-            dir3 = dir1.Crossed(dir2);
-        }
-        return true;
-    };
-    // rotate the helixAxis so that it is pointing in the normalAxis.
-    double angle;
-    gp_Dir rotAxis;
-    if (getRotationAxis(helixAxis, normalAxis, rotAxis, angle)) {
-        gp_Pnt origo(0.0, 0.0, 0.0);
-        gp_Trsf mov = helixShape.Location().Transformation();
-        mov.SetRotation(gp_Ax1(origo, rotAxis), angle);
-        TopLoc_Location loc2(mov);
-        helixShape.Move(loc2);
-    }
-}
-
-gp_Vec Hole::computePerpendicular(const gp_Vec& zDir) const
-{
-    // Define xDir
-    gp_Vec xDir;
-
-    /* Compute xDir normal to zDir */
-    if (std::abs(zDir.Z() - zDir.X()) > Precision::Confusion()) {
-        xDir = gp_Vec(zDir.Z(), 0, -zDir.X());
-    }
-    else if (std::abs(zDir.Z() - zDir.Y()) > Precision::Confusion()) {
-        xDir = gp_Vec(zDir.Y(), -zDir.X(), 0);
-    }
-    else {
-        xDir = gp_Vec(0, -zDir.Z(), zDir.Y());
-    }
-
-    // Normalize xDir; this is needed as the computation above does not necessarily give
-    // a unit-length vector.
-    xDir.Normalize();
-    return xDir;
-}
 Base::Vector3d Hole::guessNormalDirection(const TopoShape& profileshape) const
 {
     // If trying to build a hole from a cylinder face
@@ -2379,7 +2319,7 @@ TopoDS_Shape Hole::makeThread(const gp_Vec& xDir, const gp_Vec& zDir, double len
     helix.Move(loc1);
 
     // rotate the helix so that it is pointing in the zdir.
-    rotateToNormal(dir_axis1, zDir, helix);
+    threadUtils.rotateToNormal(dir_axis1, zDir, helix);
 
     // create the pipe shell
     BRepOffsetAPI_MakePipeShell mkPS(TopoDS::Wire(helix));

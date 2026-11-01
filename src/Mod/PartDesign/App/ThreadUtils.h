@@ -61,6 +61,7 @@ public:
     gp_Vec getThreadZAxis(const App::PropertyLinkSub& lateralFace) const;
     gp_Pnt getThreadAxisOrigin(const App::PropertyLinkSub& lateralFace);
     gp_Vec computePerpendicular(const gp_Vec&) const;
+    void rotateToNormal(const gp_Dir& helixAxis, const gp_Dir& normalAxis, TopoDS_Shape& helixShape) const;
     gp_Pnt getThreadStartPoint(
         const App::PropertyLinkSub& lateralFace,
         const App::PropertyLinkSub& startPlane
@@ -330,7 +331,6 @@ private:
         int pitchIndex,
         const App::PropertyEnumeration& threadClass
     ) const;
-    void rotateToNormal(const gp_Dir& helixAxis, const gp_Dir& normalAxis, TopoDS_Shape& helixShape) const;
 
     // TODO: ThreadLibrary should be static member or singleton to improve performance
     class ThreadLibrary
