@@ -75,20 +75,6 @@ namespace PartDesign
 
 const char* Hole::DepthTypeEnums[] = {"Dimension", "ThroughAll", /*, "UpToFirst", */ nullptr};
 const char* Hole::ThreadDepthTypeEnums[] = {"Hole Depth", "Dimension", "Tapped (DIN76)", nullptr};
-const char* Hole::ThreadTypeEnums[] = {
-    "None",
-    "ISOMetricProfile",
-    "ISOMetricFineProfile",
-    "UNC",
-    "UNF",
-    "UNEF",
-    "NPT",
-    "BSP",
-    "BSW",
-    "BSF",
-    "ISOTyre",
-    nullptr
-};
 
 const char* Hole::ClearanceNoneEnums[] = {"-", "-", "-", nullptr};
 const char* Hole::ClearanceMetricEnums[] = {"Medium", "Fine", "Coarse", nullptr};
@@ -100,7 +86,6 @@ const char* Hole::DrillPointEnums[] = {"Flat", "Angled", nullptr};
 
 const char* Hole::HoleCutType_None_Enums[]
     = {"None", "Counterbore", "Countersink", "Counterdrill", nullptr};
-const char* Hole::ThreadClass_None_Enums[] = {"None", nullptr};
 
 /* Sources:
   http://www.engineeringtoolbox.com/metric-threads-d_777.html
@@ -474,28 +459,6 @@ std::vector<std::string> Hole::HoleCutType_ISOmetricfine_Enums
 const char* Hole::ThreadClass_ISOmetricfine_Enums[]
     = {"4G", "4H", "5G", "5H", "6G", "6H", "7G", "7H", "8G", "8H", nullptr};
 
-// ISO 965-1:2013 ISO general purpose metric screw threads - Tolerances - Part 1
-// Table 1 - Fundamentral deviations for internal threads ...
-// reproduced in: https://www.accu.co.uk/en/p/134-iso-metric-thread-tolerances [retrieved: 2021-01-11]
-const double Hole::ThreadClass_ISOmetric_data[ThreadClass_ISOmetric_data_size][2] = {
-    //  Pitch    G
-    {0.2, 0.017},  {0.25, 0.018}, {0.3, 0.018},  {0.35, 0.019}, {0.4, 0.019},
-    {0.45, 0.020}, {0.5, 0.020},  {0.6, 0.021},  {0.7, 0.022},  {0.75, 0.022},
-    {0.8, 0.024},  {1.0, 0.026},  {1.25, 0.028}, {1.5, 0.032},  {1.75, 0.034},
-    {2.0, 0.038},  {2.5, 0.042},  {3.0, 0.048},  {3.5, 0.053},  {4.0, 0.060},
-    {4.5, 0.063},  {5.0, 0.071},  {5.5, 0.075},  {6.0, 0.080},  {8.0, 0.100}
-};
-
-/* According to DIN 76-1 (Thread run-outs and thread undercuts - Part 1: For ISO metric threads in
- * accordance with DIN 13-1) */
-const double Hole::ThreadRunout[ThreadRunout_size][2] = {
-    //  Pitch    e1
-    {0.2, 1.3},  {0.25, 1.5}, {0.3, 1.8},  {0.35, 2.1}, {0.4, 2.3},  {0.45, 2.6},
-    {0.5, 2.8},  {0.6, 3.4},  {0.7, 3.8},  {0.75, 4.0}, {0.8, 4.2},  {1.0, 5.1},
-    {1.25, 6.2}, {1.5, 7.3},  {1.75, 8.3}, {2.0, 9.3},  {2.5, 11.2}, {3.0, 13.1},
-    {3.5, 15.2}, {4.0, 16.8}, {4.5, 18.4}, {5.0, 20.8}, {5.5, 22.4}, {6.0, 24.0}
-};
-
 /* Details from https://en.wikipedia.org/wiki/Unified_Thread_Standard */
 
 /* UTS coarse */
@@ -531,8 +494,6 @@ const char* Hole::HoleCutType_BSF_Enums[]
     = {"None", "Counterbore", "Countersink", "Counterdrill", nullptr};
 const char* Hole::ThreadClass_BSF_Enums[] = {"Medium", "Normal", nullptr};
 
-const char* Hole::ThreadDirectionEnums[] = {"Right", "Left", nullptr};
-
 PROPERTY_SOURCE(PartDesign::Hole, PartDesign::ProfileBased)
 
 const App::PropertyAngle::Constraints Hole::floatAngle = {
@@ -552,6 +513,8 @@ Hole::Hole()
 {
     addSubType = FeatureAddSub::Subtractive;
 
+    threadUtils.executeReadThreadDefinitions();
+
     readCutDefinitions();
 
     ADD_PROPERTY_TYPE(Threaded, (false), "Hole", App::Prop_None, "Threaded");
@@ -561,13 +524,13 @@ Hole::Hole()
     ADD_PROPERTY_TYPE(CosmeticThread, (true), "Hole", App::Prop_None, "Texture the thread");
 
     ADD_PROPERTY_TYPE(ThreadType, (0L), "Hole", App::Prop_None, "Thread type");
-    ThreadType.setEnums(ThreadTypeEnums);
+    ThreadType.setEnums(ThreadUtils::ThreadTypeEnums);
 
     ADD_PROPERTY_TYPE(ThreadSize, (0L), "Hole", App::Prop_None, "Thread size");
     ThreadSize.setEnums(getThreadDesignations(ThreadType.getValue()));
 
     ADD_PROPERTY_TYPE(ThreadClass, (0L), "Hole", App::Prop_None, "Thread class");
-    ThreadClass.setEnums(ThreadClass_None_Enums);
+    ThreadClass.setEnums(ThreadUtils::ThreadClass_None_Enums);
 
     ADD_PROPERTY_TYPE(ThreadFit, (0L), "Hole", App::Prop_None, "Clearance hole fit");
     ThreadFit.setEnums(ClearanceMetricEnums);
@@ -579,7 +542,7 @@ Hole::Hole()
     ThreadDiameter.setReadOnly(true);
 
     ADD_PROPERTY_TYPE(ThreadDirection, (0L), "Hole", App::Prop_None, "Thread direction");
-    ThreadDirection.setEnums(ThreadDirectionEnums);
+    ThreadDirection.setEnums(ThreadUtils::ThreadDirectionEnums);
     ThreadDirection.setReadOnly(true);
 
     ADD_PROPERTY_TYPE(HoleCutType, (0L), "Hole", App::Prop_None, "Head cut type");
@@ -912,7 +875,7 @@ double Hole::getThreadClassClearance() const
 
     // Calculate how much clearance to add based on Thread tolerance class and pitch
     if (ThreadClass.getValueAsString()[1] == 'G') {
-        for (auto it : ThreadClass_ISOmetric_data) {
+        for (auto it : ThreadUtils::ThreadClass_ISOmetric_data) {
             double p = it[0];
             if (pitch <= p) {
                 return it[1];
@@ -946,7 +909,7 @@ double Hole::getThreadRunout(int mode) const
         default:
             throw Base::ValueError("Unsupported argument");
     }
-    for (auto it : ThreadRunout) {
+    for (auto it : ThreadUtils::ThreadRunout) {
         double p = it[0];
         if (pitch <= p) {
             return sf * it[1];
@@ -1287,7 +1250,7 @@ void Hole::onChanged(const App::Property* prop)
         }
 
         if (type == "None") {
-            ThreadClass.setEnums(ThreadClass_None_Enums);
+            ThreadClass.setEnums(ThreadUtils::ThreadClass_None_Enums);
             HoleCutType.setEnums(HoleCutType_None_Enums);
             Threaded.setValue(false);
             ModelThread.setValue(false);
@@ -1320,12 +1283,12 @@ void Hole::onChanged(const App::Property* prop)
             ThreadFit.setEnums(ClearanceUTSEnums);
         }
         else if (type == "BSP") {
-            ThreadClass.setEnums(ThreadClass_None_Enums);
+            ThreadClass.setEnums(ThreadUtils::ThreadClass_None_Enums);
             HoleCutType.setEnums(HoleCutType_BSP_Enums);
             ThreadFit.setEnums(ClearanceMetricEnums);
         }
         else if (type == "NPT") {
-            ThreadClass.setEnums(ThreadClass_None_Enums);
+            ThreadClass.setEnums(ThreadUtils::ThreadClass_None_Enums);
             HoleCutType.setEnums(HoleCutType_NPT_Enums);
             ThreadFit.setEnums(ClearanceUTSEnums);
         }
@@ -1340,7 +1303,7 @@ void Hole::onChanged(const App::Property* prop)
             ThreadFit.setEnums(ClearanceOtherEnums);
         }
         else if (type == "ISOTyre") {
-            ThreadClass.setEnums(ThreadClass_None_Enums);
+            ThreadClass.setEnums(ThreadUtils::ThreadClass_None_Enums);
             HoleCutType.setEnums(HoleCutType_None_Enums);
         }
 

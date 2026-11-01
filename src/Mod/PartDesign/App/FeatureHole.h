@@ -29,6 +29,7 @@
 #include <App/PropertyUnits.h>
 #include "nlohmann/json_fwd.hpp"
 #include "FeatureSketchBased.h"
+#include "ThreadUtils.h"
 
 class Property;
 
@@ -39,9 +40,6 @@ class XMLReader;
 
 namespace PartDesign
 {
-
-static constexpr size_t ThreadClass_ISOmetric_data_size = 25;
-static constexpr size_t ThreadRunout_size = 24;
 
 class PartDesignExport Hole: public ProfileBased
 {
@@ -149,22 +147,18 @@ protected:
 private:
     static const char* DepthTypeEnums[];
     static const char* ThreadDepthTypeEnums[];
-    static const char* ThreadTypeEnums[];
     static const char* ClearanceNoneEnums[];
     static const char* ClearanceMetricEnums[];
     static const char* ClearanceUTSEnums[];
     static const char* ClearanceOtherEnums[];
     static const char* DrillPointEnums[];
-    static const char* ThreadDirectionEnums[];
 
     /* "None" thread profile */
     static const char* HoleCutType_None_Enums[];
-    static const char* ThreadClass_None_Enums[];
 
     /* ISO metric coarse profile */
     static std::vector<std::string> HoleCutType_ISOmetric_Enums;
     static const char* ThreadClass_ISOmetric_Enums[];
-    static const double ThreadClass_ISOmetric_data[ThreadClass_ISOmetric_data_size][2];
 
     /* ISO metric fine profile */
     static std::vector<std::string> HoleCutType_ISOmetricfine_Enums;
@@ -196,7 +190,6 @@ private:
     static const char* HoleCutType_BSF_Enums[];
     static const char* ThreadClass_BSF_Enums[];
 
-    static const double ThreadRunout[ThreadRunout_size][2];
     // Populated during findHoles() and consumed by
     // ViewProviderHole for cosmetic thread matching.
     mutable std::vector<gp_Pnt> _holeLocations;
@@ -299,6 +292,8 @@ private:
     void rotateToNormal(const gp_Dir& helixAxis, const gp_Dir& normalAxis, TopoDS_Shape& helixShape) const;
     gp_Vec computePerpendicular(const gp_Vec&) const;
     TopoDS_Shape makeThread(const gp_Vec&, const gp_Vec&, double);
+
+    ThreadUtils threadUtils;
 
     // helpers for nlohmann json
     friend void from_json(const nlohmann::json& j, CounterBoreDimension& t);
