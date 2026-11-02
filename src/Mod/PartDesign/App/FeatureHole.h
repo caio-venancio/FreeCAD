@@ -103,15 +103,6 @@ public:
     //@}
     short mustExecute() const override;
 
-    using ThreadDescription = struct
-    {
-        const char* designation;
-        double diameter;
-        double pitch;
-        double TapDrill;
-    };
-    static const std::vector<Hole::ThreadDescription> threadDescription[];
-
     static const double metricHoleDiameters[51][4];
 
     using UTSClearanceDefinition = struct

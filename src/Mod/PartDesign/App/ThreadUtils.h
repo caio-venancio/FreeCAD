@@ -56,6 +56,26 @@ public:
         const double farEndTrim,
         const double usefulThreadLength = 0.0
     );
+    struct ThreadSweep
+    {
+        double pitch;
+        double helixRadius;
+        double helixLength;
+        double helixAngleDegrees;
+        bool leftHanded;
+    };
+    TopoDS_Shape makeThreadSolid(
+        const TopoDS_Wire& profile,
+        const ThreadSweep& sweep,
+        const gp_Vec& zDir
+    ) const;
+    Part::TopoShape makeLegacyThreadProfile(
+        const std::string& threadType,
+        double majorRadius,
+        double pitch,
+        const gp_Vec& xDir,
+        const gp_Vec& zDir
+    ) const;
     App::DocumentObjectExecReturn* validateParameters(const App::PropertyLinkSub& lateralFace);
     bool isInternalFace(const App::PropertyLinkSub& faceProp, const TopoDS_Shape& solid);
     gp_Vec getThreadZAxis(const App::PropertyLinkSub& lateralFace) const;
@@ -66,15 +86,6 @@ public:
         const App::PropertyLinkSub& lateralFace,
         const App::PropertyLinkSub& startPlane
     );
-
-    using ThreadDescription = struct
-    {
-        const char* designation;
-        double diameter;
-        double pitch;
-        double TapDrill;
-    };
-    static const std::vector<ThreadUtils::ThreadDescription> threadDescription[];
 
     std::vector<double> getThreadDiameterValues(const int threadType) const;
     std::vector<std::string> getThreadDiameterLabels(const int threadType) const;
@@ -298,13 +309,6 @@ private:
         int pitchIndex,
         bool isInternalThread,
         double majorRadius,
-        const gp_Vec& xDir,
-        const gp_Vec& zDir
-    ) const;
-    Part::TopoShape makeLegacyThreadProfile(
-        const std::string& threadType,
-        double majorRadius,
-        double pitch,
         const gp_Vec& xDir,
         const gp_Vec& zDir
     ) const;
