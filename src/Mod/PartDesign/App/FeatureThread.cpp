@@ -755,7 +755,7 @@ try {
                     ThreadSizePitch.setEnums(
                         threadUtils.getThreadPitches(ThreadType.getValue(), ThreadSize.getValue())
                     );
-                    if (!ThreadSizePitch.isValid() && ThreadSizePitch.hasEnums()) {
+                    if (ThreadSizePitch.hasEnums()) {
                         ThreadSizePitch.setValue(0L);
                     }
                 }
@@ -783,7 +783,7 @@ try {
         ThreadSizePitch.setEnums(
             threadUtils.getThreadPitches(ThreadType.getValue(), ThreadSize.getValue())
         );
-        if (!ThreadSizePitch.isValid() && ThreadSizePitch.hasEnums()) {
+        if (ThreadSizePitch.hasEnums()) {
             ThreadSizePitch.setValue(0L);
         }
         updateThreadDesignation();

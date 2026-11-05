@@ -213,7 +213,7 @@
       <item row="2" column="0">
        <widget class="QLabel" name="labelDiameter">
         <property name="text">
-         <string>Diameter</string>
+         <string>Size</string>
         </property>
        </widget>
       </item>
