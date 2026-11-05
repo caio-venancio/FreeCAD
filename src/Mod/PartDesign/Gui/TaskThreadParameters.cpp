@@ -116,6 +116,8 @@ TaskThreadParameters::TaskThreadParameters(ViewProviderDressUp* threadView, QWid
     ui->designationEdit->setReadOnly(true);
     ui->designationEdit->setText(thread->ThreadDesignation.getValue());
 
+    updateFieldVisibility();
+
     connect(
         ui->standardCombo,
         qOverload<int>(&QComboBox::currentIndexChanged),
@@ -387,6 +389,8 @@ void TaskThreadParameters::threadTypeChanged(int index)
         ui->classCombo->setCurrentIndex(threadClassIndex);
     }
 
+    updateFieldVisibility();
+
     recomputeFeature();
 }
 
@@ -508,6 +512,30 @@ void TaskThreadParameters::customThreadClearanceChanged(double value)
 }
 
 
+void TaskThreadParameters::updateFieldVisibility()
+{
+    auto thread = getObject<PartDesign::Thread>();
+    if (!thread) {
+        return;
+    }
+
+    const bool pitchVisible = thread->isPitchSelectable();
+    const bool classVisible = thread->hasThreadClasses();
+    const bool directionVisible = thread->allowsLeftHand();
+
+    ui->labelPitch->setVisible(pitchVisible);
+    ui->pitchCombo->setVisible(pitchVisible);
+
+    ui->labelClass->setVisible(classVisible);
+    ui->classCombo->setVisible(classVisible);
+    // The custom-clearance row only makes sense when classes drive the clearance.
+    ui->customClearanceCheck->setVisible(classVisible);
+    ui->customClearanceField->setVisible(classVisible);
+
+    ui->labelDirection->setVisible(directionVisible);
+    ui->directionCombo->setVisible(directionVisible);
+}
+
 void TaskThreadParameters::changedObject(const App::Document&, const App::Property& property)
 {
     auto thread = getObject<PartDesign::Thread>();
@@ -560,6 +588,7 @@ void TaskThreadParameters::changedObject(const App::Document&, const App::Proper
         updateComboBoxItems(ui->classCombo, translatedClassTypes, thread->ThreadClass.getValue());
 
         ui->designationEdit->setText(thread->ThreadDesignation.getValue());
+        updateFieldVisibility();
     }
     else if (&property == &thread->ThreadDirection) {
         QSignalBlocker blocker(ui->directionCombo);

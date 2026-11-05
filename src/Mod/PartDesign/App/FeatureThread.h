@@ -105,6 +105,13 @@ public:
     std::optional<gp_Dir> getThreadNormal() const;
     const Part::TopoShape& getReducedBasePreviewShape() const;
 
+    /// Whether the current standard lets the user pick the pitch (UI query).
+    bool isPitchSelectable() const;
+    /// Whether the current standard allows left-hand threads (UI query).
+    bool allowsLeftHand() const;
+    /// Whether the current standard/side defines tolerance classes (UI query).
+    bool hasThreadClasses() const;
+
 protected:
     void onChanged(const App::Property* prop) override;
     void onDocumentRestored() override;

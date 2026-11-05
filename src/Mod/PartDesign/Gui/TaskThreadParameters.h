@@ -81,6 +81,8 @@ protected:
     void changedObject(const App::Document&, const App::Property& property);
     void setThreadSelectionGate();
     void setLinkSubText(QLineEdit* edit, const App::PropertyLinkSub& prop);
+    /// Show/hide Pitch, Class and Direction rows based on the current standard.
+    void updateFieldVisibility();
 
 private Q_SLOTS:
     void threadTypeChanged(int index);
