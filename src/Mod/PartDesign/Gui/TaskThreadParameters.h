@@ -81,6 +81,7 @@ protected:
     void changedObject(const App::Document&, const App::Property& property);
     void setThreadSelectionGate();
     void setLinkSubText(QLineEdit* edit, const App::PropertyLinkSub& prop);
+    void updateFieldVisibility();
 
 private Q_SLOTS:
     void threadTypeChanged(int index);

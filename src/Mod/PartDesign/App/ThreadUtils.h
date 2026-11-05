@@ -125,6 +125,9 @@ public:
         double supportTaperSlope = 0.0
     ) const;
     std::vector<std::string> getThreadClasses(const int threadType, const bool isInternal) const;
+    bool threadPitchSelectable(const int threadType) const;
+    bool threadAllowsLeftHand(const int threadType) const;
+    bool threadHasClasses(const int threadType, const bool isInternal) const;
     std::string getThreadDesignations(
         const int threadType,
         const int threadDiameter,
@@ -197,8 +200,9 @@ public:
         std::string description;
         std::string threadType;
         bool isConical;
+        bool pitchSelectable;
+        bool allowsLeftHand;
         std::filesystem::path file;
-        int depthType;
         std::vector<std::string> sketches;
         std::vector<std::string> spreadsheets;
         std::vector<std::string> sizes;
@@ -217,7 +221,8 @@ public:
 
         ThreadDefinition()
             : isConical(false)
-            , depthType(0)
+            , pitchSelectable(true)
+            , allowsLeftHand(true)
             , profileStatus(ProfileStatus::Missing)
             , externalProfileStatus(ProfileStatus::Missing)
         {}
@@ -226,7 +231,8 @@ public:
             : name(n)
             , description(desc)
             , isConical(false)
-            , depthType(0)
+            , pitchSelectable(true)
+            , allowsLeftHand(true)
             , profileStatus(ProfileStatus::Missing)
             , externalProfileStatus(ProfileStatus::Missing)
         {}
@@ -234,14 +240,14 @@ public:
         ThreadDefinition(
             const std::string& n,
             const std::string& desc,
-            const std::string& type,
-            int depth = 0
+            const std::string& type
         )
             : name(n)
             , description(desc)
             , threadType(type)
             , isConical(false)
-            , depthType(depth)
+            , pitchSelectable(true)
+            , allowsLeftHand(true)
             , profileStatus(ProfileStatus::Missing)
             , externalProfileStatus(ProfileStatus::Missing)
         {}

@@ -105,6 +105,10 @@ public:
     std::optional<gp_Dir> getThreadNormal() const;
     const Part::TopoShape& getReducedBasePreviewShape() const;
 
+    bool isPitchSelectable() const;
+    bool allowsLeftHand() const;
+    bool hasThreadClasses() const;
+
 protected:
     void onChanged(const App::Property* prop) override;
     void onDocumentRestored() override;

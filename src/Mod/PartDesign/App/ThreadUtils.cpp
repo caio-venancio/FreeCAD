@@ -845,6 +845,26 @@ std::vector<std::string> ThreadUtils::getThreadClasses(const int threadType, con
     return classes;
 }
 
+bool ThreadUtils::threadPitchSelectable(const int threadType) const
+{
+    const auto& definition = checkedThreadDefinition(getThreadDefinitions(), threadType);
+    return definition.pitchSelectable;
+}
+
+bool ThreadUtils::threadAllowsLeftHand(const int threadType) const
+{
+    const auto& definition = checkedThreadDefinition(getThreadDefinitions(), threadType);
+    return definition.allowsLeftHand;
+}
+
+bool ThreadUtils::threadHasClasses(const int threadType, const bool isInternal) const
+{
+    const auto& definition = checkedThreadDefinition(getThreadDefinitions(), threadType);
+    const auto& clearances = isInternal ? definition.internalClearances
+                                        : definition.externalClearances;
+    return !clearances.empty();
+}
+
 std::string ThreadUtils::getThreadDesignations(
     const int threadType,
     const int threadDiameter,
@@ -862,7 +882,7 @@ std::string ThreadUtils::getThreadDesignations(
             : std::string();
         const std::string& id = definition.id;
         const bool hasClass = !threadClass.empty() && threadClass != "None";
-        const std::string handSuffix = isLeftHanded ? " LH" : "";
+        const std::string handSuffix = (isLeftHanded && definition.allowsLeftHand) ? " LH" : "";
 
         const auto formatNumber = [](double value) {
             std::ostringstream oss;
@@ -2357,20 +2377,27 @@ std::optional<ThreadUtils::ThreadDefinition> ThreadUtils::findMetadata(App::Docu
         return std::nullopt;
     }
 
-    auto* propDepth = varset->getPropertyByName("Depth");
-    if (!propDepth) {
-        Base::Console().error("Property 'Depth' was not found in VarSet.\n");
-        return std::nullopt;
+    if (auto* prop = varset->getPropertyByName("PitchSelectable")) {
+        if (auto* boolProp = dynamic_cast<App::PropertyBool*>(prop)) {
+            definition.pitchSelectable = boolProp->getValue();
+        }
+        else {
+            Base::Console().log(
+                "Property 'PitchSelectable' found in VarSet but is not bool. Defaulting to true.\n"
+            );
+        }
     }
 
-    auto* depthProp = dynamic_cast<App::PropertyInteger*>(propDepth);
-    if (!depthProp) {
-        Base::Console().error("Property 'Depth' is not integer.\n");
-        return std::nullopt;
+    if (auto* prop = varset->getPropertyByName("LeftHand")) {
+        if (auto* boolProp = dynamic_cast<App::PropertyBool*>(prop)) {
+            definition.allowsLeftHand = boolProp->getValue();
+        }
+        else {
+            Base::Console().log(
+                "Property 'LeftHand' found in VarSet but is not bool. Defaulting to true.\n"
+            );
+        }
     }
-
-    definition.depthType = depthProp->getValue();
-
 
     auto* propIsConical = varset->getPropertyByName("Conical");
     if (propIsConical) {

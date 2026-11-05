@@ -703,12 +703,50 @@ void Thread::onDocumentRestored()
     DressUp::onDocumentRestored();
 }
 
+bool Thread::isPitchSelectable() const
+{
+    if (!ThreadType.isValid() || std::string(ThreadType.getValueAsString()) == "None") {
+        return false;
+    }
+    try {
+        return threadUtils.threadPitchSelectable(ThreadType.getValue());
+    }
+    catch (const Base::Exception&) {
+        return true;
+    }
+}
+
+bool Thread::allowsLeftHand() const
+{
+    if (!ThreadType.isValid() || std::string(ThreadType.getValueAsString()) == "None") {
+        return false;
+    }
+    try {
+        return threadUtils.threadAllowsLeftHand(ThreadType.getValue());
+    }
+    catch (const Base::Exception&) {
+        return true;
+    }
+}
+
+bool Thread::hasThreadClasses() const
+{
+    if (!ThreadType.isValid() || std::string(ThreadType.getValueAsString()) == "None") {
+        return false;
+    }
+    try {
+        return threadUtils.threadHasClasses(ThreadType.getValue(), IsInternal.getValue());
+    }
+    catch (const Base::Exception&) {
+        return false;
+    }
+}
+
 void Thread::updateThreadClasses()
 {
     std::vector<std::string> classes {"None"};
     const bool isNone = !ThreadType.isValid()
         || std::string(ThreadType.getValueAsString()) == "None";
-
     if (!isNone) {
         classes = threadUtils.getThreadClasses(ThreadType.getValue(), IsInternal.getValue());
     }
@@ -771,6 +809,9 @@ try {
         }
 
         updateThreadClasses();
+        if (!allowsLeftHand() && ThreadDirection.isValid() && ThreadDirection.getValue() != 0) {
+            ThreadDirection.setValue(0L);
+        }
         updateThreadDesignation();
     }
     else if (prop == &ThreadSize) {
