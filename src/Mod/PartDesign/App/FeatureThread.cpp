@@ -755,7 +755,8 @@ try {
                     ThreadSizePitch.setEnums(
                         threadUtils.getThreadPitches(ThreadType.getValue(), ThreadSize.getValue())
                     );
-                    if (!ThreadSizePitch.isValid() && ThreadSizePitch.hasEnums()) {
+                    // Default to the largest pitch (index 0), per the thread standards document.
+                    if (ThreadSizePitch.hasEnums()) {
                         ThreadSizePitch.setValue(0L);
                     }
                 }
@@ -783,7 +784,8 @@ try {
         ThreadSizePitch.setEnums(
             threadUtils.getThreadPitches(ThreadType.getValue(), ThreadSize.getValue())
         );
-        if (!ThreadSizePitch.isValid() && ThreadSizePitch.hasEnums()) {
+        // Default to the largest pitch (index 0), per the thread standards document.
+        if (ThreadSizePitch.hasEnums()) {
             ThreadSizePitch.setValue(0L);
         }
         updateThreadDesignation();

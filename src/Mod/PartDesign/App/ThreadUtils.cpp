@@ -789,17 +789,29 @@ std::vector<std::string> ThreadUtils::getThreadPitches(const int threadType, con
     }
     const double targetDiameter = diameters[threadDiameter];
     const size_t rowCount = std::min(definition.sizes.size(), definition.pitches.size());
+    std::vector<std::pair<double, std::string>> pitchEntries;
     for (size_t row = 0; row < rowCount; ++row) {
         if (definition.sizes[row].empty() || definition.pitches[row].empty()) {
             continue;
         }
         if (std::abs(parseThreadValue(definition.sizes[row]) - targetDiameter)
             < threadDefinitionTolerance) {
-            parseThreadValue(definition.pitches[row]);
+            const double pitchValue = parseThreadValue(definition.pitches[row]);
             std::ostringstream oss;
             oss << std::noshowpoint << definition.pitches[row] << " mm";
-            pitches.push_back(oss.str());
+            pitchEntries.emplace_back(pitchValue, oss.str());
         }
+    }
+    // The largest pitch is the default (index 0), per the thread standards document.
+    std::stable_sort(
+        pitchEntries.begin(),
+        pitchEntries.end(),
+        [](const auto& lhs, const auto& rhs) {
+            return lhs.first > rhs.first;
+        }
+    );
+    for (auto& entry : pitchEntries) {
+        pitches.push_back(std::move(entry.second));
     }
     if (pitches.empty()) {
         return {"0.0"};
