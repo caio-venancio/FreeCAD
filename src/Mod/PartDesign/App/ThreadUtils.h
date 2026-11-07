@@ -128,6 +128,7 @@ public:
     bool threadPitchSelectable(const int threadType) const;
     bool threadAllowsLeftHand(const int threadType) const;
     bool threadHasClasses(const int threadType, const bool isInternal) const;
+    bool threadIsConical(const int threadType) const;
     std::string getThreadDesignations(
         const int threadType,
         const int threadDiameter,

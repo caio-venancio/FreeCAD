@@ -865,6 +865,12 @@ bool ThreadUtils::threadHasClasses(const int threadType, const bool isInternal) 
     return !clearances.empty();
 }
 
+bool ThreadUtils::threadIsConical(const int threadType) const
+{
+    const auto& definition = checkedThreadDefinition(getThreadDefinitions(), threadType);
+    return definition.isConical;
+}
+
 std::string ThreadUtils::getThreadDesignations(
     const int threadType,
     const int threadDiameter,

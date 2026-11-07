@@ -26,6 +26,7 @@
 #include <QWidget>
 #include <QEvent>
 #include <QLineEdit>
+#include <QVariant>
 
 #include <App/Document.h>
 #include <App/DocumentObject.h>
@@ -80,9 +81,7 @@ TaskThreadParameters::TaskThreadParameters(ViewProviderDressUp* threadView, QWid
     };
 
     ui->standardCombo->clear();
-    const std::vector<std::string> cursorStandard = thread->ThreadTypeName.getEnumVector();
-    addComboBoxItems(ui->standardCombo, cursorStandard);
-    ui->standardCombo->setCurrentIndex(thread->ThreadType.getValue());
+    populateStandardCombo();
 
     ui->diameterCombo->clear();
     const std::vector<std::string> cursorDiameter = thread->ThreadSize.getEnumVector();
@@ -323,6 +322,8 @@ void TaskThreadParameters::onSelectionChanged(const Gui::SelectionChanges& msg)
             thread->LateralFace.setValue(selectedObject, planes);
             recomputeFeature();
             setLinkSubText(ui->lateralFaceEdit, thread->LateralFace);
+            populateStandardCombo();
+            updateFieldVisibility();
             ui->selectLateralFace->setChecked(false);
             Gui::Selection().clearSelection();
             break;
@@ -379,10 +380,13 @@ void TaskThreadParameters::threadTypeChanged(int index)
         return;
     }
 
+    const QVariant data = ui->standardCombo->itemData(index);
+    const int threadType = data.isValid() ? data.toInt() : index;
+
     const QString threadClassText = ui->classCombo->currentText();
 
     setupTransaction();
-    thread->ThreadType.setValue(index);
+    thread->ThreadType.setValue(threadType);
 
     const int threadClassIndex = ui->classCombo->findText(threadClassText, Qt::MatchContains);
     if (threadClassIndex > -1) {
@@ -512,6 +516,43 @@ void TaskThreadParameters::customThreadClearanceChanged(double value)
 }
 
 
+void TaskThreadParameters::populateStandardCombo()
+{
+    auto thread = getObject<PartDesign::Thread>();
+    if (!thread) {
+        return;
+    }
+
+    QSignalBlocker blocker(ui->standardCombo);
+    ui->standardCombo->clear();
+
+    const std::vector<std::string> names = thread->ThreadTypeName.getEnumVector();
+    const int currentType = thread->ThreadType.getValue();
+    int selected = -1;
+
+    for (int i = 0; i < static_cast<int>(names.size()); ++i) {
+        if (!thread->threadTypeMatchesFace(i)) {
+            continue;
+        }
+        ui->standardCombo->addItem(tr(names[i].c_str()), QVariant(i));
+        if (i == currentType) {
+            selected = ui->standardCombo->count() - 1;
+        }
+    }
+
+    if (selected >= 0) {
+        ui->standardCombo->setCurrentIndex(selected);
+    }
+    else if (ui->standardCombo->count() > 0) {
+        ui->standardCombo->setCurrentIndex(0);
+        const int fallbackType = ui->standardCombo->itemData(0).toInt();
+        if (fallbackType != currentType) {
+            setupTransaction();
+            thread->ThreadType.setValue(fallbackType);
+        }
+    }
+}
+
 void TaskThreadParameters::updateFieldVisibility()
 {
     auto thread = getObject<PartDesign::Thread>();
@@ -572,7 +613,7 @@ void TaskThreadParameters::changedObject(const App::Document&, const App::Proper
 
     if (&property == &thread->ThreadType) {
         ui->standardCombo->setEnabled(true);
-        updateComboBox(ui->standardCombo, thread->ThreadType.getValue());
+        populateStandardCombo();
 
         updateComboBoxItems(
             ui->diameterCombo,
@@ -620,6 +661,8 @@ void TaskThreadParameters::changedObject(const App::Document&, const App::Proper
     }
     else if (&property == &thread->LateralFace) {
         setLinkSubText(ui->lateralFaceEdit, thread->LateralFace);
+        populateStandardCombo();
+        updateFieldVisibility();
     }
     else if (&property == &thread->StartPlane) {
         setLinkSubText(ui->startEdit, thread->StartPlane);

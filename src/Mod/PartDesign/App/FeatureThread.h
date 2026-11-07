@@ -109,6 +109,15 @@ public:
     bool allowsLeftHand() const;
     bool hasThreadClasses() const;
 
+    enum class FaceKind
+    {
+        None,
+        Cylinder,
+        Cone
+    };
+    FaceKind getLateralFaceKind() const;
+    bool threadTypeMatchesFace(int threadType) const;
+
 protected:
     void onChanged(const App::Property* prop) override;
     void onDocumentRestored() override;

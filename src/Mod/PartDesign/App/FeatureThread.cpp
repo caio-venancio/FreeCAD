@@ -742,6 +742,37 @@ bool Thread::hasThreadClasses() const
     }
 }
 
+Thread::FaceKind Thread::getLateralFaceKind() const
+{
+    if (LateralFace.getValue() == nullptr) {
+        return FaceKind::None;
+    }
+    try {
+        return threadUtils.isConicalFace(LateralFace) ? FaceKind::Cone : FaceKind::Cylinder;
+    }
+    catch (const Base::Exception&) {
+        return FaceKind::None;
+    }
+    catch (const Standard_Failure&) {
+        return FaceKind::None;
+    }
+}
+
+bool Thread::threadTypeMatchesFace(int threadType) const
+{
+    const FaceKind kind = getLateralFaceKind();
+    if (kind == FaceKind::None) {
+        return true;
+    }
+    try {
+        const bool conicalThread = threadUtils.threadIsConical(threadType);
+        return (kind == FaceKind::Cone) ? conicalThread : !conicalThread;
+    }
+    catch (const Base::Exception&) {
+        return true;
+    }
+}
+
 void Thread::updateThreadClasses()
 {
     std::vector<std::string> classes {"None"};
