@@ -114,6 +114,25 @@ bool usesNominalSizeLabels(const std::string& threadType)
         || isWhitworthThread(threadType);
 }
 
+struct ThreadTypeGroup
+{
+    const char* name;
+    std::vector<std::string> ids;
+};
+
+const ThreadTypeGroup* findThreadTypeGroup(const std::string& id)
+{
+    static const std::vector<ThreadTypeGroup> groups {
+        {"ANSI pipes", {"NPT", "NPSC", "NPTR", "NPSM", "NPSL"}},
+    };
+    for (const auto& group : groups) {
+        if (std::find(group.ids.begin(), group.ids.end(), id) != group.ids.end()) {
+            return &group;
+        }
+    }
+    return nullptr;
+}
+
 const ThreadUtils::ThreadDefinition& checkedThreadDefinition(
     const std::vector<ThreadUtils::ThreadDefinition>& definitions,
     int threadType
@@ -432,11 +451,11 @@ const char* ThreadUtils::ThreadTypeNameEnums[] = {
     nullptr
 };
 
-int threadTypeFromString(const std::string& type)
+int threadTypeFromId(const std::string& id)
 {
-    const auto begin = std::begin(ThreadUtils::ThreadTypeNameEnums);
-    const auto end = std::end(ThreadUtils::ThreadTypeNameEnums) - 1;
-    const auto found = std::find(begin, end, type);
+    const auto begin = std::begin(ThreadUtils::ThreadTypeEnums);
+    const auto end = std::end(ThreadUtils::ThreadTypeEnums) - 1;
+    const auto found = std::find(begin, end, id);
     return found == end ? 0 : static_cast<int>(found - begin);
 }
 
@@ -871,6 +890,36 @@ bool ThreadUtils::threadIsConical(const int threadType) const
     return definition.isConical;
 }
 
+std::vector<int> ThreadUtils::getThreadTypeGroupMembers(const int threadType) const
+{
+    const auto& definitions = getThreadDefinitions();
+    const auto& definition = checkedThreadDefinition(definitions, threadType);
+    const ThreadTypeGroup* group = findThreadTypeGroup(definition.id);
+    if (!group) {
+        return {};
+    }
+
+    std::vector<int> members;
+    for (const auto& id : group->ids) {
+        const auto found = std::find_if(
+            definitions.begin(),
+            definitions.end(),
+            [&id](const ThreadDefinition& candidate) { return candidate.id == id; }
+        );
+        if (found != definitions.end()) {
+            members.push_back(static_cast<int>(found - definitions.begin()));
+        }
+    }
+    return members;
+}
+
+std::string ThreadUtils::getThreadTypeGroupName(const int threadType) const
+{
+    const auto& definition = checkedThreadDefinition(getThreadDefinitions(), threadType);
+    const ThreadTypeGroup* group = findThreadTypeGroup(definition.id);
+    return group ? group->name : std::string();
+}
+
 std::string ThreadUtils::getThreadDesignations(
     const int threadType,
     const int threadDiameter,
@@ -979,7 +1028,7 @@ double ThreadUtils::getThreadClassClearance(
     if (className.size() < 2 || (className[1] != 'G' && className[1] != 'g')) {
         return 0.0;
     }
-    const int legacyType = threadTypeFromString(definition.name);
+    const int legacyType = threadTypeFromId(definition.id);
     if (legacyType < 0 || static_cast<size_t>(legacyType) >= std::size(threadDescription)
         || threadSize < 0 || static_cast<size_t>(threadSize) >= threadDescription[legacyType].size()) {
         throw Base::IndexError(QT_TRANSLATE_NOOP("Exception", "Thread size out of range"));
@@ -1453,7 +1502,7 @@ TopoDS_Shape ThreadUtils::makeThread(
 
 
     // https://en.wikipedia.org/wiki/File:ISO_and_UTS_Thread_Dimensions.svg
-    const std::vector<std::string> currentThreads = ThreadUtils::getThreadTypeNameEnums();
+    const std::vector<std::string> currentThreads = ThreadUtils::getThreadTypeEnums();
     if (static_cast<size_t>(threadType) >= currentThreads.size()) {
         throw Base::IndexError(QT_TRANSLATE_NOOP("Exception", "Thread type out of range"));
     }
@@ -1469,7 +1518,7 @@ TopoDS_Shape ThreadUtils::makeThread(
     }
 
     const std::string& currentThread = currentThreads[threadType];
-    const int currentThreadTypeIndex = threadTypeFromString(currentThread);
+    const int currentThreadTypeIndex = threadTypeFromId(currentThread);
     double majorRadius = threadDiameters[threadSize] / 2.0;
     const double pitch = getThreadPitch(threadType, threadSize, threadPitch);
     if (pitch <= Precision::Confusion()) {

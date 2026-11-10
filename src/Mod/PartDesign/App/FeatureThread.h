@@ -108,6 +108,8 @@ public:
     bool isPitchSelectable() const;
     bool allowsLeftHand() const;
     bool hasThreadClasses() const;
+    std::vector<int> getThreadTypeGroupMembers(int threadType) const;
+    std::string getThreadTypeGroupName(int threadType) const;
 
     enum class FaceKind
     {
@@ -124,6 +126,7 @@ protected:
     void updatePreviewShape() override;
 
 private:
+    void updateThreadTypeEnums();
     void updateThreadDesignation();
     void updateThreadClasses();
     ThreadExtent resolveThreadExtent(const Part::TopoShape& base);

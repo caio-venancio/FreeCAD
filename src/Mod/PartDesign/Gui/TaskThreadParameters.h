@@ -83,9 +83,11 @@ protected:
     void setLinkSubText(QLineEdit* edit, const App::PropertyLinkSub& prop);
     void updateFieldVisibility();
     void populateStandardCombo();
+    void populateStyleCombo();
 
 private Q_SLOTS:
     void threadTypeChanged(int index);
+    void threadStyleChanged(int index);
     void threadSizeChanged(int index);
     void threadSizePitchChanged(int index);
     void depthChanged(double value);

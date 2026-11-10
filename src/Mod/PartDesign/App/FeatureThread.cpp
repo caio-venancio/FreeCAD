@@ -678,6 +678,13 @@ void Thread::updatePreviewShape()
 
 void Thread::onDocumentRestored()
 {
+    try {
+        updateThreadTypeEnums();
+    }
+    catch (const Base::Exception& e) {
+        Base::Console().warning("Thread::onDocumentRestored: %s\n", e.what());
+    }
+
     if (ThreadType.isValid() && ThreadSize.isValid()) {
         try {
             const auto labels = threadUtils.getThreadDiameterLabels(ThreadType.getValue());
@@ -773,6 +780,26 @@ bool Thread::threadTypeMatchesFace(int threadType) const
     }
 }
 
+std::vector<int> Thread::getThreadTypeGroupMembers(int threadType) const
+{
+    try {
+        return threadUtils.getThreadTypeGroupMembers(threadType);
+    }
+    catch (const Base::Exception&) {
+        return {};
+    }
+}
+
+std::string Thread::getThreadTypeGroupName(int threadType) const
+{
+    try {
+        return threadUtils.getThreadTypeGroupName(threadType);
+    }
+    catch (const Base::Exception&) {
+        return {};
+    }
+}
+
 void Thread::updateThreadClasses()
 {
     std::vector<std::string> classes {"None"};
@@ -786,6 +813,31 @@ void Thread::updateThreadClasses()
         ThreadClass.setEnums(classes);
     }
     ThreadClass.setReadOnly(isNone);
+}
+
+void Thread::updateThreadTypeEnums()
+{
+    const std::vector<std::string> names = threadUtils.getThreadTypeNameEnums();
+    if (names != ThreadTypeName.getEnumVector()) {
+        ThreadTypeName.setEnums(names);
+    }
+
+    const std::vector<std::string> ids = threadUtils.getThreadTypeEnums();
+    if (ids == ThreadType.getEnumVector() || !ThreadType.isValid()) {
+        return;
+    }
+
+    const std::string savedId = ThreadType.getValueAsString();
+    if (std::find(ids.begin(), ids.end(), savedId) == ids.end()) {
+        return;
+    }
+
+    const std::string savedPitch = ThreadSizePitch.isValid() ? ThreadSizePitch.getValueAsString()
+                                                             : std::string();
+    ThreadType.setEnums(ids);
+    if (!savedPitch.empty() && ThreadSizePitch.isPartOf(savedPitch.c_str())) {
+        ThreadSizePitch.setValue(savedPitch.c_str());
+    }
 }
 
 void Thread::updateThreadDesignation()
@@ -810,6 +862,11 @@ void Thread::updateThreadDesignation()
 
 void Thread::onChanged(const App::Property* prop)
 try {
+    if (isRestoring() && (prop == &ThreadType || prop == &IsInternal || prop == &ThreadSize)) {
+        DressUp::onChanged(prop);
+        return;
+    }
+
     if (prop == &ThreadType || prop == &IsInternal) {
         std::string type;
 

@@ -23,6 +23,8 @@
  ***************************************************************************/
 
 
+#include <algorithm>
+
 #include <QWidget>
 #include <QEvent>
 #include <QLineEdit>
@@ -122,6 +124,13 @@ TaskThreadParameters::TaskThreadParameters(ViewProviderDressUp* threadView, QWid
         qOverload<int>(&QComboBox::currentIndexChanged),
         this,
         &TaskThreadParameters::threadTypeChanged
+    );
+
+    connect(
+        ui->styleCombo,
+        qOverload<int>(&QComboBox::currentIndexChanged),
+        this,
+        &TaskThreadParameters::threadStyleChanged
     );
 
     connect(
@@ -398,6 +407,34 @@ void TaskThreadParameters::threadTypeChanged(int index)
     recomputeFeature();
 }
 
+void TaskThreadParameters::threadStyleChanged(int index)
+{
+    if (index < 0) {
+        return;
+    }
+
+    auto thread = getObject<PartDesign::Thread>();
+    if (!thread) {
+        return;
+    }
+
+    const QVariant data = ui->styleCombo->itemData(index);
+    if (!data.isValid()) {
+        return;
+    }
+    const int threadType = data.toInt();
+    if (threadType == thread->ThreadType.getValue()) {
+        return;
+    }
+
+    setupTransaction();
+    thread->ThreadType.setValue(threadType);
+
+    updateFieldVisibility();
+
+    recomputeFeature();
+}
+
 void TaskThreadParameters::threadSizeChanged(int index)
 {
     if (index < 0) {
@@ -529,19 +566,50 @@ void TaskThreadParameters::populateStandardCombo()
     const std::vector<std::string> names = thread->ThreadTypeName.getEnumVector();
     const int currentType = thread->ThreadType.getValue();
     int selected = -1;
+    int sameGroupItem = -1;
+    std::vector<int> groupedTypes;
 
     for (int i = 0; i < static_cast<int>(names.size()); ++i) {
         if (!thread->threadTypeMatchesFace(i)) {
             continue;
         }
-        ui->standardCombo->addItem(tr(names[i].c_str()), QVariant(i));
-        if (i == currentType) {
+        if (std::find(groupedTypes.begin(), groupedTypes.end(), i) != groupedTypes.end()) {
+            continue;
+        }
+
+        int itemType = i;
+        QString itemText = tr(names[i].c_str());
+        bool currentInGroup = false;
+        const std::vector<int> members = thread->getThreadTypeGroupMembers(i);
+        if (!members.empty()) {
+            groupedTypes.insert(groupedTypes.end(), members.begin(), members.end());
+            currentInGroup = std::find(members.begin(), members.end(), currentType) != members.end();
+            if (currentInGroup && thread->threadTypeMatchesFace(currentType)) {
+                itemType = currentType;
+            }
+            itemText = tr(thread->getThreadTypeGroupName(i).c_str());
+        }
+
+        ui->standardCombo->addItem(itemText, QVariant(itemType));
+        if (itemType == currentType) {
             selected = ui->standardCombo->count() - 1;
         }
+        else if (currentInGroup) {
+            sameGroupItem = ui->standardCombo->count() - 1;
+        }
+    }
+
+    if (selected < 0) {
+        selected = sameGroupItem;
     }
 
     if (selected >= 0) {
         ui->standardCombo->setCurrentIndex(selected);
+        const int selectedType = ui->standardCombo->itemData(selected).toInt();
+        if (selectedType != currentType) {
+            setupTransaction();
+            thread->ThreadType.setValue(selectedType);
+        }
     }
     else if (ui->standardCombo->count() > 0) {
         ui->standardCombo->setCurrentIndex(0);
@@ -551,6 +619,38 @@ void TaskThreadParameters::populateStandardCombo()
             thread->ThreadType.setValue(fallbackType);
         }
     }
+
+    populateStyleCombo();
+}
+
+void TaskThreadParameters::populateStyleCombo()
+{
+    auto thread = getObject<PartDesign::Thread>();
+    if (!thread) {
+        return;
+    }
+
+    QSignalBlocker blocker(ui->styleCombo);
+    ui->styleCombo->clear();
+
+    const std::vector<std::string> names = thread->ThreadTypeName.getEnumVector();
+    const int currentType = thread->ThreadType.getValue();
+    const std::vector<int> members = thread->getThreadTypeGroupMembers(currentType);
+
+    for (const int member : members) {
+        if (member < 0 || member >= static_cast<int>(names.size())
+            || !thread->threadTypeMatchesFace(member)) {
+            continue;
+        }
+        ui->styleCombo->addItem(tr(names[member].c_str()), QVariant(member));
+        if (member == currentType) {
+            ui->styleCombo->setCurrentIndex(ui->styleCombo->count() - 1);
+        }
+    }
+
+    const bool styleVisible = !members.empty();
+    ui->labelStyle->setVisible(styleVisible);
+    ui->styleCombo->setVisible(styleVisible);
 }
 
 void TaskThreadParameters::updateFieldVisibility()
