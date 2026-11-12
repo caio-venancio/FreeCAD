@@ -108,10 +108,22 @@ bool isWhitworthThread(const std::string& threadType)
     return threadType == "BSP" || threadType == "BSW" || threadType == "BSF";
 }
 
+const std::vector<std::string>& ansiPipeThreadIds()
+{
+    static const std::vector<std::string> ids {"NPT", "NPSC", "NPTR", "NPSM", "NPSL"};
+    return ids;
+}
+
+bool isAnsiPipeThread(const std::string& threadType)
+{
+    const auto& ids = ansiPipeThreadIds();
+    return std::find(ids.begin(), ids.end(), threadType) != ids.end();
+}
+
 bool usesNominalSizeLabels(const std::string& threadType)
 {
-    return threadType == "UNC" || threadType == "UNF" || threadType == "UNEF" || threadType == "NPT"
-        || isWhitworthThread(threadType);
+    return threadType == "UNC" || threadType == "UNF" || threadType == "UNEF"
+        || isAnsiPipeThread(threadType) || isWhitworthThread(threadType);
 }
 
 struct ThreadTypeGroup
@@ -123,7 +135,7 @@ struct ThreadTypeGroup
 const ThreadTypeGroup* findThreadTypeGroup(const std::string& id)
 {
     static const std::vector<ThreadTypeGroup> groups {
-        {"ANSI pipes", {"NPT", "NPSC", "NPTR", "NPSM", "NPSL"}},
+        {"ANSI pipes", ansiPipeThreadIds()},
     };
     for (const auto& group : groups) {
         if (std::find(group.ids.begin(), group.ids.end(), id) != group.ids.end()) {
@@ -433,6 +445,8 @@ const char* ThreadUtils::ThreadTypeEnums[] = {
     "BSW",
     "BSF",
     "ISOTyre",
+    "NPSM",
+    "NPSL",
     nullptr
 };
 
@@ -945,7 +959,9 @@ std::string ThreadUtils::getThreadDesignations(
             return oss.str();
         };
         const auto threadsPerInch = [&]() {
-            return std::to_string(static_cast<long>(std::lround(25.4 / selection.pitch)));
+            const long halves = std::lround(2.0 * 25.4 / selection.pitch);
+            const std::string whole = std::to_string(halves / 2);
+            return halves % 2 == 0 ? whole : whole + " 1/2";
         };
 
         if (id == "ISOMetricProfile" || id == "ISOMetricFineProfile") {
@@ -969,8 +985,8 @@ std::string ThreadUtils::getThreadDesignations(
             return result + handSuffix;
         }
 
-        if (id == "NPT") {
-            return designation + "-" + threadsPerInch() + " NPT" + handSuffix;
+        if (isAnsiPipeThread(id)) {
+            return designation + "-" + threadsPerInch() + " " + id + handSuffix;
         }
 
         if (id == "BSP") {
