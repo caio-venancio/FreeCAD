@@ -447,6 +447,8 @@ const char* ThreadUtils::ThreadTypeEnums[] = {
     "ISOTyre",
     "NPSM",
     "NPSL",
+    "NPTR",
+    "NPSC",
     nullptr
 };
 
@@ -598,7 +600,7 @@ std::optional<double> ThreadUtils::estimateKnownMinorDiameter(
     else if (
         threadDefinitionId == "ISOMetricProfile" || threadDefinitionId == "ISOMetricFineProfile"
         || threadDefinitionId == "UNC" || threadDefinitionId == "UNF" || threadDefinitionId == "UNEF"
-        || threadDefinitionId == "NPT" || threadDefinitionId == "ISOTyre"
+        || isAnsiPipeThread(threadDefinitionId) || threadDefinitionId == "ISOTyre"
     ) {
         const double triangleHeight = std::sqrt(3.0) / 2.0 * pitch;
         const double profileHeight = 5.0 * triangleHeight / 8.0;
@@ -902,6 +904,12 @@ bool ThreadUtils::threadIsConical(const int threadType) const
 {
     const auto& definition = checkedThreadDefinition(getThreadDefinitions(), threadType);
     return definition.isConical;
+}
+
+bool ThreadUtils::threadIsInternalOnly(const int threadType) const
+{
+    const auto& definition = checkedThreadDefinition(getThreadDefinitions(), threadType);
+    return definition.isInternalOnly;
 }
 
 std::vector<int> ThreadUtils::getThreadTypeGroupMembers(const int threadType) const
@@ -2485,6 +2493,19 @@ std::optional<ThreadUtils::ThreadDefinition> ThreadUtils::findMetadata(App::Docu
     }
     else {
         definition.isConical = false;
+    }
+
+    auto* propInternalOnly = varset->getPropertyByName("InternalOnly");
+    if (propInternalOnly) {
+        auto* internalOnlyProp = dynamic_cast<App::PropertyBool*>(propInternalOnly);
+        if (internalOnlyProp) {
+            definition.isInternalOnly = internalOnlyProp->getValue();
+        }
+        else {
+            Base::Console().log(
+                "Property 'InternalOnly' found in VarSet but is not bool. Defaulting to false.\n"
+            );
+        }
     }
 
     return definition;

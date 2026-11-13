@@ -129,6 +129,7 @@ public:
     bool threadAllowsLeftHand(const int threadType) const;
     bool threadHasClasses(const int threadType, const bool isInternal) const;
     bool threadIsConical(const int threadType) const;
+    bool threadIsInternalOnly(const int threadType) const;
     std::vector<int> getThreadTypeGroupMembers(const int threadType) const;
     std::string getThreadTypeGroupName(const int threadType) const;
     std::string getThreadDesignations(
@@ -203,6 +204,7 @@ public:
         std::string description;
         std::string threadType;
         bool isConical;
+        bool isInternalOnly;
         bool pitchSelectable;
         bool allowsLeftHand;
         std::filesystem::path file;
@@ -224,6 +226,7 @@ public:
 
         ThreadDefinition()
             : isConical(false)
+            , isInternalOnly(false)
             , pitchSelectable(true)
             , allowsLeftHand(true)
             , profileStatus(ProfileStatus::Missing)
@@ -234,6 +237,7 @@ public:
             : name(n)
             , description(desc)
             , isConical(false)
+            , isInternalOnly(false)
             , pitchSelectable(true)
             , allowsLeftHand(true)
             , profileStatus(ProfileStatus::Missing)
@@ -249,6 +253,7 @@ public:
             , description(desc)
             , threadType(type)
             , isConical(false)
+            , isInternalOnly(false)
             , pitchSelectable(true)
             , allowsLeftHand(true)
             , profileStatus(ProfileStatus::Missing)

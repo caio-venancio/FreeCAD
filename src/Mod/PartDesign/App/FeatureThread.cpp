@@ -772,6 +772,9 @@ bool Thread::threadTypeMatchesFace(int threadType) const
         return true;
     }
     try {
+        if (!IsInternal.getValue() && threadUtils.threadIsInternalOnly(threadType)) {
+            return false;
+        }
         const bool conicalThread = threadUtils.threadIsConical(threadType);
         return (kind == FaceKind::Cone) ? conicalThread : !conicalThread;
     }
