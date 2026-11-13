@@ -110,6 +110,8 @@ public:
     bool hasThreadClasses() const;
     std::vector<int> getThreadTypeGroupMembers(int threadType) const;
     std::string getThreadTypeGroupName(int threadType) const;
+    int getRTypeVariant(int threadType) const;
+    int getRTypeBase(int threadType) const;
 
     enum class FaceKind
     {

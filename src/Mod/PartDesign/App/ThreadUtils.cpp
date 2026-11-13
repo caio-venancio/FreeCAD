@@ -123,6 +123,7 @@ bool isAnsiPipeThread(const std::string& threadType)
 bool usesNominalSizeLabels(const std::string& threadType)
 {
     return threadType == "UNC" || threadType == "UNF" || threadType == "UNEF"
+        || threadType == "UNRC" || threadType == "UNRF" || threadType == "UNREF"
         || isAnsiPipeThread(threadType) || isWhitworthThread(threadType);
 }
 
@@ -449,6 +450,9 @@ const char* ThreadUtils::ThreadTypeEnums[] = {
     "NPSL",
     "NPTR",
     "NPSC",
+    "UNRC",
+    "UNRF",
+    "UNREF",
     nullptr
 };
 
@@ -596,6 +600,10 @@ std::optional<double> ThreadUtils::estimateKnownMinorDiameter(
     if (threadDefinitionId == "BSP" || threadDefinitionId == "BSW" || threadDefinitionId == "BSF") {
         const double triangleHeight = 0.960491 * pitch;
         rootRadius = majorRadius - (2.0 * triangleHeight / 3.0);
+    }
+    else if (threadDefinitionId == "UNRC" || threadDefinitionId == "UNRF"
+             || threadDefinitionId == "UNREF") {
+        rootRadius = majorRadius - 0.59539247 * pitch;
     }
     else if (
         threadDefinitionId == "ISOMetricProfile" || threadDefinitionId == "ISOMetricFineProfile"
@@ -814,6 +822,20 @@ double ThreadUtils::getMinorDiameter(const int threadType, const int size, const
     return getMinorDiameterForRow(*selection.definition, selection.row, true);
 }
 
+double ThreadUtils::getSupportDiameter(
+    const int threadType,
+    const int size,
+    const int pitch,
+    const bool isInternalThread
+) const
+{
+    const ResolvedThreadSelection selection = resolveThreadSelection(threadType, size, pitch);
+    if (!isInternalThread) {
+        return selection.majorDiameter;
+    }
+    return getMinorDiameterForRow(*selection.definition, selection.row, false);
+}
+
 std::vector<std::string> ThreadUtils::getThreadPitches(const int threadType, const int threadDiameter) const
 {
     const auto& definition = checkedThreadDefinition(getThreadDefinitions(), threadType);
@@ -912,6 +934,43 @@ bool ThreadUtils::threadIsInternalOnly(const int threadType) const
     return definition.isInternalOnly;
 }
 
+bool ThreadUtils::threadIsExternalOnly(const int threadType) const
+{
+    const auto& definition = checkedThreadDefinition(getThreadDefinitions(), threadType);
+    return definition.isExternalOnly;
+}
+
+int ThreadUtils::getRTypeVariant(const int threadType) const
+{
+    const auto& definitions = getThreadDefinitions();
+    const auto& definition = checkedThreadDefinition(definitions, threadType);
+    if (!definition.rTypeOf.empty()) {
+        return -1;
+    }
+    for (size_t index = 0; index < definitions.size(); ++index) {
+        if (static_cast<int>(index) != threadType && definitions[index].rTypeOf == definition.id) {
+            return static_cast<int>(index);
+        }
+    }
+    return -1;
+}
+
+int ThreadUtils::getRTypeBase(const int threadType) const
+{
+    const auto& definitions = getThreadDefinitions();
+    const auto& definition = checkedThreadDefinition(definitions, threadType);
+    if (definition.rTypeOf.empty()) {
+        return -1;
+    }
+    for (size_t index = 0; index < definitions.size(); ++index) {
+        if (static_cast<int>(index) != threadType && definitions[index].id == definition.rTypeOf
+            && definitions[index].rTypeOf.empty()) {
+            return static_cast<int>(index);
+        }
+    }
+    return -1;
+}
+
 std::vector<int> ThreadUtils::getThreadTypeGroupMembers(const int threadType) const
 {
     const auto& definitions = getThreadDefinitions();
@@ -985,7 +1044,8 @@ std::string ThreadUtils::getThreadDesignations(
             return "---";
         }
 
-        if (id == "UNC" || id == "UNF" || id == "UNEF") {
+        if (id == "UNC" || id == "UNF" || id == "UNEF" || id == "UNRC" || id == "UNRF"
+            || id == "UNREF") {
             std::string result = designation + "-" + threadsPerInch() + " " + id;
             if (hasClass) {
                 result += "-" + threadClass;
@@ -2505,6 +2565,26 @@ std::optional<ThreadUtils::ThreadDefinition> ThreadUtils::findMetadata(App::Docu
             Base::Console().log(
                 "Property 'InternalOnly' found in VarSet but is not bool. Defaulting to false.\n"
             );
+        }
+    }
+
+    if (auto* prop = varset->getPropertyByName("ExternalOnly")) {
+        if (auto* boolProp = dynamic_cast<App::PropertyBool*>(prop)) {
+            definition.isExternalOnly = boolProp->getValue();
+        }
+        else {
+            Base::Console().log(
+                "Property 'ExternalOnly' found in VarSet but is not bool. Defaulting to false.\n"
+            );
+        }
+    }
+
+    if (auto* prop = varset->getPropertyByName("RTypeOf")) {
+        if (auto* stringProp = dynamic_cast<App::PropertyString*>(prop)) {
+            definition.rTypeOf = stringProp->getValue();
+        }
+        else {
+            Base::Console().log("Property 'RTypeOf' found in VarSet but is not string. Ignoring it.\n");
         }
     }
 

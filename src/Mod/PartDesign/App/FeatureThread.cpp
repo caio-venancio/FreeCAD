@@ -363,16 +363,30 @@ try {
     const bool diameterMismatch = std::abs(diameter - definedDiameter) > Precision::Confusion();
     if (ModelThread.getValue() && isCylindricalSupport
         && (sizeMismatch || pitchMismatch || diameterMismatch)) {
-        std::ostringstream diameterText;
-        diameterText << std::fixed << std::setprecision(3) << diameter;
-        std::string formattedDiameter = diameterText.str();
-        formattedDiameter.erase(formattedDiameter.find_last_not_of('0') + 1);
-        if (formattedDiameter.back() == '.') {
-            formattedDiameter.pop_back();
-        }
+        const auto formatMillimeters = [](double value) {
+            std::ostringstream text;
+            text << std::fixed << std::setprecision(7) << value;
+            std::string formatted = text.str();
+            formatted.erase(formatted.find_last_not_of('0') + 1);
+            if (formatted.back() == '.') {
+                formatted.pop_back();
+            }
+            return formatted;
+        };
         const std::string threadKind = IsInternal.getValue() ? "internal" : "external";
-        const std::string msg = "Thread error: Selected " + threadKind
-            + " thread does not match the support diameter " + formattedDiameter + " mm.";
+        std::string msg = "Thread error: Selected " + threadKind
+            + " thread does not match the support diameter " + formatMillimeters(diameter) + " mm.";
+        try {
+            const double supportDiameter = threadUtils.getSupportDiameter(
+                ThreadType.getValue(),
+                ThreadSize.getValue(),
+                ThreadSizePitch.getValue(),
+                IsInternal.getValue()
+            );
+            msg += " Try " + formatMillimeters(supportDiameter) + " mm.";
+        }
+        catch (const Base::Exception&) {
+        }
         return new App::DocumentObjectExecReturn(msg.c_str());
     }
 
@@ -775,6 +789,9 @@ bool Thread::threadTypeMatchesFace(int threadType) const
         if (!IsInternal.getValue() && threadUtils.threadIsInternalOnly(threadType)) {
             return false;
         }
+        if (IsInternal.getValue() && threadUtils.threadIsExternalOnly(threadType)) {
+            return false;
+        }
         const bool conicalThread = threadUtils.threadIsConical(threadType);
         return (kind == FaceKind::Cone) ? conicalThread : !conicalThread;
     }
@@ -800,6 +817,26 @@ std::string Thread::getThreadTypeGroupName(int threadType) const
     }
     catch (const Base::Exception&) {
         return {};
+    }
+}
+
+int Thread::getRTypeVariant(int threadType) const
+{
+    try {
+        return threadUtils.getRTypeVariant(threadType);
+    }
+    catch (const Base::Exception&) {
+        return -1;
+    }
+}
+
+int Thread::getRTypeBase(int threadType) const
+{
+    try {
+        return threadUtils.getRTypeBase(threadType);
+    }
+    catch (const Base::Exception&) {
+        return -1;
     }
 }
 

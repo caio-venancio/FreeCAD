@@ -134,6 +134,13 @@ TaskThreadParameters::TaskThreadParameters(ViewProviderDressUp* threadView, QWid
     );
 
     connect(
+        ui->rTypeCheck,
+        &QCheckBox::toggled,
+        this,
+        &TaskThreadParameters::threadRTypeChanged
+    );
+
+    connect(
         ui->Depth,
         qOverload<double>(&Gui::QuantitySpinBox::valueChanged),
         this,
@@ -435,6 +442,34 @@ void TaskThreadParameters::threadStyleChanged(int index)
     recomputeFeature();
 }
 
+void TaskThreadParameters::threadRTypeChanged(bool checked)
+{
+    auto thread = getObject<PartDesign::Thread>();
+    if (!thread) {
+        return;
+    }
+
+    const int currentType = thread->ThreadType.getValue();
+    const int rTypeBase = thread->getRTypeBase(currentType);
+    int threadType = -1;
+    if (checked && rTypeBase < 0) {
+        threadType = thread->getRTypeVariant(currentType);
+    }
+    else if (!checked && rTypeBase >= 0) {
+        threadType = rTypeBase;
+    }
+    if (threadType < 0 || threadType == currentType) {
+        return;
+    }
+
+    setupTransaction();
+    thread->ThreadType.setValue(threadType);
+
+    updateFieldVisibility();
+
+    recomputeFeature();
+}
+
 void TaskThreadParameters::threadSizeChanged(int index)
 {
     if (index < 0) {
@@ -576,6 +611,10 @@ void TaskThreadParameters::populateStandardCombo()
         if (std::find(groupedTypes.begin(), groupedTypes.end(), i) != groupedTypes.end()) {
             continue;
         }
+        const int rTypeBase = thread->getRTypeBase(i);
+        if (rTypeBase >= 0 && thread->threadTypeMatchesFace(rTypeBase)) {
+            continue;
+        }
 
         int itemType = i;
         QString itemText = tr(names[i].c_str());
@@ -588,6 +627,14 @@ void TaskThreadParameters::populateStandardCombo()
                 itemType = currentType;
             }
             itemText = tr(thread->getThreadTypeGroupName(i).c_str());
+        }
+
+        const int rTypeVariant = thread->getRTypeVariant(i);
+        if (rTypeVariant >= 0 && rTypeVariant == currentType) {
+            currentInGroup = true;
+            if (thread->threadTypeMatchesFace(currentType)) {
+                itemType = currentType;
+            }
         }
 
         ui->standardCombo->addItem(itemText, QVariant(itemType));
@@ -621,6 +668,24 @@ void TaskThreadParameters::populateStandardCombo()
     }
 
     populateStyleCombo();
+    populateRTypeCheck();
+}
+
+void TaskThreadParameters::populateRTypeCheck()
+{
+    auto thread = getObject<PartDesign::Thread>();
+    if (!thread) {
+        return;
+    }
+
+    QSignalBlocker blocker(ui->rTypeCheck);
+    const int currentType = thread->ThreadType.getValue();
+    const int rTypeBase = thread->getRTypeBase(currentType);
+    const int rTypeVariant = rTypeBase >= 0 ? currentType : thread->getRTypeVariant(currentType);
+    const bool visible = rTypeVariant >= 0 && thread->threadTypeMatchesFace(rTypeVariant);
+
+    ui->rTypeCheck->setChecked(rTypeBase >= 0);
+    ui->rTypeCheck->setVisible(visible);
 }
 
 void TaskThreadParameters::populateStyleCombo()

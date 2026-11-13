@@ -84,10 +84,12 @@ protected:
     void updateFieldVisibility();
     void populateStandardCombo();
     void populateStyleCombo();
+    void populateRTypeCheck();
 
 private Q_SLOTS:
     void threadTypeChanged(int index);
     void threadStyleChanged(int index);
+    void threadRTypeChanged(bool checked);
     void threadSizeChanged(int index);
     void threadSizePitchChanged(int index);
     void depthChanged(double value);

@@ -196,6 +196,9 @@ set(PartDesignThreadDefines
     Resources/Thread/UNC.FCStd
     Resources/Thread/UNF.FCStd
     Resources/Thread/UNEF.FCStd
+    Resources/Thread/UNRC.FCStd
+    Resources/Thread/UNRF.FCStd
+    Resources/Thread/UNREF.FCStd
     Resources/Thread/NPT.FCStd
     Resources/Thread/NPSM.FCStd
     Resources/Thread/NPSL.FCStd

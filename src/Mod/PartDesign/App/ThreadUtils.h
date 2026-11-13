@@ -79,6 +79,12 @@ public:
     std::vector<std::string> getThreadDiameterLabels(const int threadType) const;
     std::vector<std::string> getThreadMinorDiameters(const int threadType);
     double getMinorDiameter(const int threadType, const int size, const int pitch) const;
+    double getSupportDiameter(
+        const int threadType,
+        const int size,
+        const int pitch,
+        const bool isInternalThread
+    ) const;
     gp_Pnt getThreadStartPoint(const App::PropertyLinkSub& lateralFace, const gp_Dir& zDir) const;
     gp_Dir getThreadAxisDir(const App::PropertyLinkSub& lateralFace);
     /// Major/minor diameters are measured at startPoint; length follows the face axis.
@@ -130,6 +136,9 @@ public:
     bool threadHasClasses(const int threadType, const bool isInternal) const;
     bool threadIsConical(const int threadType) const;
     bool threadIsInternalOnly(const int threadType) const;
+    bool threadIsExternalOnly(const int threadType) const;
+    int getRTypeVariant(const int threadType) const;
+    int getRTypeBase(const int threadType) const;
     std::vector<int> getThreadTypeGroupMembers(const int threadType) const;
     std::string getThreadTypeGroupName(const int threadType) const;
     std::string getThreadDesignations(
@@ -205,8 +214,10 @@ public:
         std::string threadType;
         bool isConical;
         bool isInternalOnly;
+        bool isExternalOnly;
         bool pitchSelectable;
         bool allowsLeftHand;
+        std::string rTypeOf;
         std::filesystem::path file;
         std::vector<std::string> sketches;
         std::vector<std::string> spreadsheets;
@@ -227,6 +238,7 @@ public:
         ThreadDefinition()
             : isConical(false)
             , isInternalOnly(false)
+            , isExternalOnly(false)
             , pitchSelectable(true)
             , allowsLeftHand(true)
             , profileStatus(ProfileStatus::Missing)
@@ -238,6 +250,7 @@ public:
             , description(desc)
             , isConical(false)
             , isInternalOnly(false)
+            , isExternalOnly(false)
             , pitchSelectable(true)
             , allowsLeftHand(true)
             , profileStatus(ProfileStatus::Missing)
@@ -254,6 +267,7 @@ public:
             , threadType(type)
             , isConical(false)
             , isInternalOnly(false)
+            , isExternalOnly(false)
             , pitchSelectable(true)
             , allowsLeftHand(true)
             , profileStatus(ProfileStatus::Missing)
