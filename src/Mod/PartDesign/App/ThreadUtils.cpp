@@ -2351,7 +2351,7 @@ std::optional<ThreadUtils::ThreadDefinition::Profile> readThreadProfile(
         return std::nullopt;
     }
 
-    const Base::BoundBox3d bounds = shape.getBoundBox();
+    const Base::BoundBox3d bounds = shape.getBoundBoxOptimal();
     const double tolerance = Precision::Confusion();
     if (bounds.MinZ < -tolerance || bounds.MaxZ > tolerance) {
         status = ProfileStatus::Invalid;
