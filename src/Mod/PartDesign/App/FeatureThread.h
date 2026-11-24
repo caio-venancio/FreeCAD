@@ -121,7 +121,7 @@ public:
     std::vector<double> getThreadDiameterValues(int threadType) const;
     std::vector<std::string> getThreadDiameterLabels(int threadType) const;
     std::vector<std::string> getThreadSeriesForSize(int threadType, int sizeIndex) const;
-    std::string getCustomPitchUnit() const;
+    std::string getPitchUnit() const;
     std::string getCustomSizeUnit() const;
     ThreadUtils::CustomThreadValues getCustomThreadValues() const;
     int getRTypeVariant(int threadType) const;

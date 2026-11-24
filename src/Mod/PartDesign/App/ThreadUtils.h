@@ -174,7 +174,7 @@ public:
     bool threadAllowsCustomPitch(const int threadType) const;
     bool threadAllowsCustomSize(const int threadType) const;
     std::string getThreadStandardName(const int threadType) const;
-    std::string getCustomPitchUnit(const int threadType) const;
+    std::string getPitchUnit(const int threadType) const;
     std::string getCustomSizeUnit(const int threadType) const;
     bool threadHasClasses(const int threadType, const bool isInternal) const;
     bool threadIsConical(const int threadType) const;
@@ -280,7 +280,7 @@ public:
         std::vector<std::string> seriesNames;
         std::string standard;
         bool customPitch {false};
-        std::string customPitchUnit {"mm"};
+        std::string pitchUnit {"mm"};
         bool customSize {false};
         std::string customSizeUnit {"mm"};
         std::string customSeriesDesignation;
@@ -383,6 +383,11 @@ private:
         int pitchIndex,
         const std::string& series = {},
         const CustomThreadValues& custom = {}
+    ) const;
+    std::vector<std::pair<double, size_t>> getThreadPitchRows(
+        const int threadType,
+        const int threadDiameter,
+        const std::string& series
     ) const;
     std::optional<Part::TopoShape> prepareThreadProfile(
         const ResolvedThreadSelection& selection,

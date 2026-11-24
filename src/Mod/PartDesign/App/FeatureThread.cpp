@@ -982,10 +982,10 @@ std::vector<std::string> Thread::getThreadSeriesForSize(int threadType, int size
     }
 }
 
-std::string Thread::getCustomPitchUnit() const
+std::string Thread::getPitchUnit() const
 {
     try {
-        return threadUtils.getCustomPitchUnit(ThreadType.getValue());
+        return threadUtils.getPitchUnit(ThreadType.getValue());
     }
     catch (const Base::Exception&) {
         return "mm";

@@ -709,31 +709,13 @@ ThreadUtils::ResolvedThreadSelection ThreadUtils::resolveThreadSelection(
         );
     }
 
-    const std::vector<std::string> pitches = getThreadPitches(threadType, sizeIndex, series);
-    if (pitchIndex < 0 || static_cast<size_t>(pitchIndex) >= pitches.size()) {
+    const auto pitchRows = getThreadPitchRows(threadType, sizeIndex, series);
+    if (pitchIndex < 0 || static_cast<size_t>(pitchIndex) >= pitchRows.size()) {
         throw Base::IndexError(QT_TRANSLATE_NOOP("Exception", "Thread pitch out of range"));
     }
 
-    const double selectedPitch = parseThreadValue(pitches[pitchIndex]);
-    for (size_t row = 0; row < rowCount; ++row) {
-        if (definition.sizes[row].empty() || definition.pitches[row].empty()) {
-            continue;
-        }
-        if (!rowMatchesSeries(definition, row, series)) {
-            continue;
-        }
-
-        const double rowDiameter = parseThreadValue(definition.sizes[row]);
-        const double rowPitch = parseThreadValue(definition.pitches[row]);
-        if (std::abs(rowDiameter - selectedDiameter) < threadDefinitionTolerance
-            && std::abs(rowPitch - selectedPitch) < threadDefinitionTolerance) {
-            return {&definition, row, selectedDiameter, selectedPitch};
-        }
-    }
-
-    throw Base::ValueError(
-        QT_TRANSLATE_NOOP("Exception", "Selected thread size and pitch were not found")
-    );
+    const auto& [selectedPitch, selectedRow] = pitchRows[pitchIndex];
+    return {&definition, selectedRow, selectedDiameter, selectedPitch};
 }
 
 std::optional<Part::TopoShape> ThreadUtils::prepareThreadProfile(
@@ -996,21 +978,20 @@ double ThreadUtils::getMajorDiameterForMinor(
     return minorDiameter + depth;
 }
 
-std::vector<std::string> ThreadUtils::getThreadPitches(
+std::vector<std::pair<double, size_t>> ThreadUtils::getThreadPitchRows(
     const int threadType,
     const int threadDiameter,
     const std::string& series
 ) const
 {
     const auto& definition = checkedThreadDefinition(getThreadDefinitions(), threadType);
-    std::vector<std::string> pitches;
     const auto diameters = getThreadDiameterValues(threadType);
     if (threadDiameter < 0 || static_cast<size_t>(threadDiameter) >= diameters.size()) {
         throw Base::IndexError(QT_TRANSLATE_NOOP("Exception", "Thread size out of range"));
     }
     const double targetDiameter = diameters[threadDiameter];
     const size_t rowCount = std::min(definition.sizes.size(), definition.pitches.size());
-    std::vector<std::pair<double, std::string>> pitchEntries;
+    std::vector<std::pair<double, size_t>> rows;
     for (size_t row = 0; row < rowCount; ++row) {
         if (definition.sizes[row].empty() || definition.pitches[row].empty()) {
             continue;
@@ -1020,21 +1001,33 @@ std::vector<std::string> ThreadUtils::getThreadPitches(
         }
         if (std::abs(parseThreadValue(definition.sizes[row]) - targetDiameter)
             < threadDefinitionTolerance) {
-            const double pitchValue = parseThreadValue(definition.pitches[row]);
-            std::ostringstream oss;
-            oss << std::noshowpoint << definition.pitches[row] << " mm";
-            pitchEntries.emplace_back(pitchValue, oss.str());
+            rows.emplace_back(parseThreadValue(definition.pitches[row]), row);
         }
     }
-    std::stable_sort(
-        pitchEntries.begin(),
-        pitchEntries.end(),
-        [](const auto& lhs, const auto& rhs) {
-            return lhs.first > rhs.first;
+    std::stable_sort(rows.begin(), rows.end(), [](const auto& lhs, const auto& rhs) {
+        return lhs.first > rhs.first;
+    });
+    return rows;
+}
+
+std::vector<std::string> ThreadUtils::getThreadPitches(
+    const int threadType,
+    const int threadDiameter,
+    const std::string& series
+) const
+{
+    const auto& definition = checkedThreadDefinition(getThreadDefinitions(), threadType);
+    const bool threadsPerInch = definition.pitchUnit == "tpi";
+    std::vector<std::string> pitches;
+    for (const auto& [pitch, row] : getThreadPitchRows(threadType, threadDiameter, series)) {
+        if (threadsPerInch) {
+            pitches.push_back(formatTrimmedDecimal(25.4 / pitch, 3) + " TPI");
         }
-    );
-    for (auto& entry : pitchEntries) {
-        pitches.push_back(std::move(entry.second));
+        else {
+            std::ostringstream oss;
+            oss << std::noshowpoint << definition.pitches[row] << " mm";
+            pitches.push_back(oss.str());
+        }
     }
     if (pitches.empty()) {
         return {"0.0"};
@@ -1060,12 +1053,18 @@ double ThreadUtils::getThreadPitch(
         return *custom.pitch;
     }
 
-    const auto pitches = getThreadPitches(threadType, threadDiameter, series);
-    if (threadPitch < 0 || static_cast<size_t>(threadPitch) >= pitches.size()) {
+    const auto rows = getThreadPitchRows(threadType, threadDiameter, series);
+    if (rows.empty() && threadPitch == 0) {
+        throw Base::ValueError(QT_TRANSLATE_NOOP(
+            "Exception",
+            "Thread error: Thread pitch must be finite and greater than zero"
+        ));
+    }
+    if (threadPitch < 0 || static_cast<size_t>(threadPitch) >= rows.size()) {
         return 0.0;
     }
 
-    const double pitch = parseThreadValue(pitches[threadPitch]);
+    const double pitch = rows[threadPitch].first;
     if (pitch <= 0.0) {
         throw Base::ValueError(QT_TRANSLATE_NOOP(
             "Exception",
@@ -1158,9 +1157,9 @@ std::string ThreadUtils::getThreadStandardName(const int threadType) const
     return checkedThreadDefinition(getThreadDefinitions(), threadType).name;
 }
 
-std::string ThreadUtils::getCustomPitchUnit(const int threadType) const
+std::string ThreadUtils::getPitchUnit(const int threadType) const
 {
-    return getSeriesGroupLeader(threadType).customPitchUnit;
+    return getSeriesGroupLeader(threadType).pitchUnit;
 }
 
 std::string ThreadUtils::getCustomSizeUnit(const int threadType) const
@@ -1313,12 +1312,23 @@ std::string ThreadUtils::getThreadDesignations(
             return oss.str();
         };
         const auto threadsPerInch = [&]() {
+            const double tpi = 25.4 / selection.pitch;
             if (isCustom) {
-                return formatTrimmedDecimal(25.4 / selection.pitch, 3);
+                return formatTrimmedDecimal(tpi, 3);
             }
-            const long halves = std::lround(2.0 * 25.4 / selection.pitch);
-            const std::string whole = std::to_string(halves / 2);
-            return halves % 2 == 0 ? whole : whole + " 1/2";
+            for (const double step : {1.0, 0.5, 0.25, 0.125}) {
+                const double candidate = std::round(tpi / step) * step;
+                if (candidate <= 0.0 || std::abs(tpi - candidate) / candidate > 0.002) {
+                    continue;
+                }
+                const long wholeHalves = std::lround(candidate * 2.0);
+                if (std::abs(candidate * 2.0 - static_cast<double>(wholeHalves)) > 1e-9) {
+                    return formatTrimmedDecimal(candidate, 3);
+                }
+                const std::string whole = std::to_string(wholeHalves / 2);
+                return wholeHalves % 2 == 0 ? whole : whole + " 1/2";
+            }
+            return formatTrimmedDecimal(tpi, 3);
         };
         const auto inchSize = [&]() {
             if (!custom.size) {
@@ -2248,10 +2258,10 @@ std::optional<ThreadUtils::ThreadSizeSelection> ThreadUtils::findNearestMinorThr
             continue;
         }
 
-        const std::vector<std::string> pitches = getThreadPitches(threadType, sizeIndex, series);
+        const auto pitchRows = getThreadPitchRows(threadType, sizeIndex, series);
         int pitchIndex = -1;
-        for (size_t i = 0; i < pitches.size(); ++i) {
-            if (std::abs(parseThreadValue(pitches[i]) - rowPitch) < threadDefinitionTolerance) {
+        for (size_t i = 0; i < pitchRows.size(); ++i) {
+            if (pitchRows[i].second == row) {
                 pitchIndex = static_cast<int>(i);
                 break;
             }
@@ -2952,7 +2962,7 @@ std::optional<ThreadUtils::ThreadDefinition> ThreadUtils::findMetadata(App::Docu
 
     readString("Standard", definition.standard);
     readBool("CustomPitch", definition.customPitch);
-    readUnit("CustomPitchUnit", definition.customPitchUnit, {"mm", "tpi"});
+    readUnit("PitchUnit", definition.pitchUnit, {"mm", "tpi"});
     readBool("CustomSize", definition.customSize);
     readUnit("CustomSizeUnit", definition.customSizeUnit, {"mm", "in"});
     readString("CustomSeriesDesignation", definition.customSeriesDesignation);
@@ -3090,6 +3100,17 @@ void ThreadUtils::findSpreadsheets(App::Document* doc, ThreadDefinition& definit
                     }
                 }
             }
+        }
+    }
+
+    if (definition.pitchUnit == "tpi") {
+        for (auto& pitch : pitches) {
+            if (pitch.empty()) {
+                continue;
+            }
+            std::ostringstream oss;
+            oss << std::setprecision(17) << 25.4 / parseThreadValue(pitch);
+            pitch = oss.str();
         }
     }
 

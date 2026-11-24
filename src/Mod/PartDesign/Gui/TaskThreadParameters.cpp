@@ -602,7 +602,7 @@ void TaskThreadParameters::customThreadPitchChanged(double value)
     if (!thread || value <= 0.0) {
         return;
     }
-    const double pitch = thread->getCustomPitchUnit() == "tpi" ? 25.4 / value : value;
+    const double pitch = thread->getPitchUnit() == "tpi" ? 25.4 / value : value;
     setupTransaction();
     thread->CustomThreadPitch.setValue(pitch);
     recomputeFeature();
@@ -997,7 +997,7 @@ void TaskThreadParameters::updateCustomFields()
 
     {
         QSignalBlocker blocker(ui->customPitchField);
-        const bool threadsPerInch = thread->getCustomPitchUnit() == "tpi";
+        const bool threadsPerInch = thread->getPitchUnit() == "tpi";
         const double pitch = thread->CustomThreadPitch.getValue();
         ui->customPitchField->setSuffix(threadsPerInch ? tr(" TPI") : QStringLiteral(" mm"));
         ui->customPitchField->setDecimals(threadsPerInch ? 3 : 4);
