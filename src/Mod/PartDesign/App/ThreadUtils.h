@@ -40,6 +40,12 @@ static constexpr size_t ThreadRunout_size_utils = 24;
 class PartDesignExport ThreadUtils
 {
 public:
+    struct CustomThreadValues
+    {
+        std::optional<double> pitch;
+        std::optional<double> size;
+    };
+
     TopoDS_Shape makeThread(
         const gp_Vec& xDir,
         const gp_Vec& zDir,
@@ -54,7 +60,9 @@ public:
         const bool useCustomThreadClearance,
         const double customThreadClearance,
         const double farEndTrim,
-        const double usefulThreadLength = 0.0
+        const double usefulThreadLength = 0.0,
+        const std::string& series = {},
+        const CustomThreadValues& custom = {}
     );
     App::DocumentObjectExecReturn* validateParameters(const App::PropertyLinkSub& lateralFace);
     bool isInternalFace(const App::PropertyLinkSub& faceProp, const TopoDS_Shape& solid);
@@ -78,12 +86,25 @@ public:
     std::vector<double> getThreadDiameterValues(const int threadType) const;
     std::vector<std::string> getThreadDiameterLabels(const int threadType) const;
     std::vector<std::string> getThreadMinorDiameters(const int threadType);
-    double getMinorDiameter(const int threadType, const int size, const int pitch) const;
+    double getMinorDiameter(
+        const int threadType,
+        const int size,
+        const int pitch,
+        const std::string& series = {},
+        const CustomThreadValues& custom = {}
+    ) const;
     double getSupportDiameter(
         const int threadType,
         const int size,
         const int pitch,
-        const bool isInternalThread
+        const bool isInternalThread,
+        const std::string& series = {},
+        const CustomThreadValues& custom = {}
+    ) const;
+    double getMajorDiameterForMinor(
+        const int threadType,
+        const double minorDiameter,
+        const double pitch
     ) const;
     gp_Pnt getThreadStartPoint(const App::PropertyLinkSub& lateralFace, const gp_Dir& zDir) const;
     gp_Dir getThreadAxisDir(const App::PropertyLinkSub& lateralFace);
@@ -98,8 +119,23 @@ public:
     );
     gp_Pnt getPlaneLineIntersection(const gp_Pln& plane, const gp_Lin& line);
     std::vector<gp_Pnt> findLineCurveIntersections(const gp_Lin& line, const BRepAdaptor_Curve& curve);
-    std::vector<std::string> getThreadPitches(const int threadType, const int threadDiameter) const;
-    double getThreadPitch(const int threadType, const int threadDiameter, const int threadPitch) const;
+    std::vector<std::string> getThreadPitches(
+        const int threadType,
+        const int threadDiameter,
+        const std::string& series = {}
+    ) const;
+    double getThreadPitch(
+        const int threadType,
+        const int threadDiameter,
+        const int threadPitch,
+        const std::string& series = {},
+        const CustomThreadValues& custom = {}
+    ) const;
+    std::vector<std::string> getThreadSeries(const int threadType) const;
+    std::vector<std::string> getThreadSeriesForSize(
+        const int threadType,
+        const int threadDiameter
+    ) const;
     struct NormalizedThreadSupport
     {
         double xAtYZero;
@@ -128,11 +164,18 @@ public:
         double customThreadClearance,
         App::PropertyEnumeration& threadClass,
         bool referenceAtStart = false,
-        double supportTaperSlope = 0.0
+        double supportTaperSlope = 0.0,
+        const std::string& series = {},
+        const CustomThreadValues& custom = {}
     ) const;
     std::vector<std::string> getThreadClasses(const int threadType, const bool isInternal) const;
     bool threadPitchSelectable(const int threadType) const;
     bool threadAllowsLeftHand(const int threadType) const;
+    bool threadAllowsCustomPitch(const int threadType) const;
+    bool threadAllowsCustomSize(const int threadType) const;
+    std::string getThreadStandardName(const int threadType) const;
+    std::string getCustomPitchUnit(const int threadType) const;
+    std::string getCustomSizeUnit(const int threadType) const;
     bool threadHasClasses(const int threadType, const bool isInternal) const;
     bool threadIsConical(const int threadType) const;
     bool threadIsInternalOnly(const int threadType) const;
@@ -140,13 +183,15 @@ public:
     int getRTypeVariant(const int threadType) const;
     int getRTypeBase(const int threadType) const;
     std::vector<int> getThreadTypeGroupMembers(const int threadType) const;
-    std::string getThreadTypeGroupName(const int threadType) const;
+    std::vector<int> getThreadSeriesGroupMembers(const int threadType) const;
     std::string getThreadDesignations(
         const int threadType,
         const int threadDiameter,
         const int threadPitch,
         const bool isLeftHanded,
-        const std::string& threadClass
+        const std::string& threadClass,
+        const std::string& series = {},
+        const CustomThreadValues& custom = {}
     );
 
     double getThroughAllLength(TopoShape base) const;
@@ -161,10 +206,13 @@ public:
         Part::TopoShape base,
         const int threadType,
         const int threadSize,
+        const int threadPitch,
         const bool isInternalThread,
         const bool useCustomThreadClearance,
         const double customThreadClearance,
-        App::PropertyEnumeration& threadClass
+        App::PropertyEnumeration& threadClass,
+        const std::string& series = {},
+        const CustomThreadValues& custom = {}
     );
     gp_Pnt getThreadEndPoint(
         const App::PropertyLinkSub& lateralFace,
@@ -228,6 +276,14 @@ public:
         std::vector<std::string> tapDrills;
         std::vector<std::string> internalClearances;
         std::vector<std::string> externalClearances;
+        std::vector<std::string> series;
+        std::vector<std::string> seriesNames;
+        std::string standard;
+        bool customPitch {false};
+        std::string customPitchUnit {"mm"};
+        bool customSize {false};
+        std::string customSizeUnit {"mm"};
+        std::string customSeriesDesignation;
         std::optional<Profile> profile;
         std::optional<Profile> externalProfile;
         ProfileStatus profileStatus;
@@ -276,6 +332,7 @@ public:
     };
 
     static std::optional<ThreadDefinition> findMetadata(App::Document* doc);
+    static void findSpreadsheets(App::Document* doc, ThreadDefinition& definition);
     static void findThreadProfiles(
         App::Document* doc,
         ThreadDefinition& definition,
@@ -305,23 +362,30 @@ public:
     };
     std::optional<ThreadSizeSelection> findNearestMinorThreadSize(
         const int threadType,
-        const double diameter
+        const double diameter,
+        const std::string& series = {},
+        const std::optional<double>& customPitch = std::nullopt
     ) const;
 
 private:
     struct ResolvedThreadSelection
     {
         const ThreadDefinition* definition;
-        size_t row;
+        std::optional<size_t> row;
         double majorDiameter;
         double pitch;
+        bool customPitch {false};
     };
 
-    ResolvedThreadSelection resolveThreadSelection(int threadType, int sizeIndex, int pitchIndex) const;
-    std::optional<Part::TopoShape> prepareThreadProfile(
+    ResolvedThreadSelection resolveThreadSelection(
         int threadType,
         int sizeIndex,
         int pitchIndex,
+        const std::string& series = {},
+        const CustomThreadValues& custom = {}
+    ) const;
+    std::optional<Part::TopoShape> prepareThreadProfile(
+        const ResolvedThreadSelection& selection,
         bool isInternalThread,
         double majorRadius,
         const gp_Vec& xDir,
@@ -350,11 +414,18 @@ private:
         size_t row,
         bool preferExternalProfile
     ) const;
-    double getThreadClassClearance(
-        int threadType,
-        int threadSize,
-        const App::PropertyEnumeration& threadClass
+    double computeMinorDiameter(
+        const ThreadDefinition& definition,
+        double majorDiameter,
+        double pitch,
+        bool preferExternalProfile
     ) const;
+    double getMinorDiameterForSelection(
+        const ResolvedThreadSelection& selection,
+        bool preferExternalProfile
+    ) const;
+    const ThreadDefinition& getSeriesGroupLeader(const int threadType) const;
+    double getThreadClassClearance(double pitch, const App::PropertyEnumeration& threadClass) const;
     void rotateToNormal(const gp_Dir& helixAxis, const gp_Dir& normalAxis, TopoDS_Shape& helixShape) const;
 
     // TODO: ThreadLibrary should be static member or singleton to improve performance
@@ -377,7 +448,6 @@ private:
             App::Document* doc,
             const std::string& source
         ) const;
-        void findSpreadsheets(App::Document* doc, ThreadDefinition& definition) const;
     };
 
     ThreadLibrary library;

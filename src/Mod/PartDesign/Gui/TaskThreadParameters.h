@@ -25,6 +25,7 @@
 #pragma once
 
 #include <memory>
+#include <vector>
 
 
 #include "TaskDressUpParameters.h"
@@ -85,13 +86,22 @@ protected:
     void populateStandardCombo();
     void populateStyleCombo();
     void populateRTypeCheck();
+    void populateSizeCombo();
+    void populateSeriesCombo();
+    void updateCustomFields();
+    std::vector<int> getSizeGroupMembers() const;
+    double getCurrentSizeDiameter() const;
+    int findSizeIndex(int threadType, double diameter) const;
 
 private Q_SLOTS:
     void threadTypeChanged(int index);
     void threadStyleChanged(int index);
     void threadRTypeChanged(bool checked);
     void threadSizeChanged(int index);
+    void threadSeriesChanged(int index);
     void threadSizePitchChanged(int index);
+    void customThreadSizeChanged(double value);
+    void customThreadPitchChanged(double value);
     void depthChanged(double value);
     void depthTypeChanged(int index);
     void threadClassChanged(int index);

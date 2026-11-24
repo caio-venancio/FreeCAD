@@ -61,6 +61,7 @@ public:
     App::PropertyEnumeration ThreadType;
     App::PropertyEnumeration ThreadTypeName;
     App::PropertyEnumeration ThreadSize;
+    App::PropertyEnumeration ThreadSeries;
     App::PropertyEnumeration ThreadSizePitch;
     App::PropertyEnumeration ThreadClass;
     App::PropertyEnumeration ThreadFit;
@@ -70,6 +71,10 @@ public:
     App::PropertyString ThreadDesignation;
     App::PropertyBool UseCustomThreadClearance;
     App::PropertyLength CustomThreadClearance;
+    App::PropertyBool UseCustomThreadPitch;
+    App::PropertyLength CustomThreadPitch;
+    App::PropertyBool UseCustomThreadSize;
+    App::PropertyLength CustomThreadSize;
     App::PropertyBool ModelThread;
     App::PropertyBool CosmeticThread;
     App::PropertyBool IsInternal;
@@ -107,9 +112,18 @@ public:
 
     bool isPitchSelectable() const;
     bool allowsLeftHand() const;
+    bool allowsCustomPitch() const;
+    bool allowsCustomSize() const;
     bool hasThreadClasses() const;
     std::vector<int> getThreadTypeGroupMembers(int threadType) const;
-    std::string getThreadTypeGroupName(int threadType) const;
+    std::vector<int> getThreadSeriesGroupMembers(int threadType) const;
+    std::string getThreadStandardName(int threadType) const;
+    std::vector<double> getThreadDiameterValues(int threadType) const;
+    std::vector<std::string> getThreadDiameterLabels(int threadType) const;
+    std::vector<std::string> getThreadSeriesForSize(int threadType, int sizeIndex) const;
+    std::string getCustomPitchUnit() const;
+    std::string getCustomSizeUnit() const;
+    ThreadUtils::CustomThreadValues getCustomThreadValues() const;
     int getRTypeVariant(int threadType) const;
     int getRTypeBase(int threadType) const;
 
@@ -131,6 +145,11 @@ private:
     void updateThreadTypeEnums();
     void updateThreadDesignation();
     void updateThreadClasses();
+    void updateThreadSeries();
+    void updateThreadSizePitches();
+    void updateCustomPropertyStatus();
+    void seedCustomThreadValues();
+    std::string getThreadSeriesName() const;
     ThreadExtent resolveThreadExtent(const Part::TopoShape& base);
     ThreadUtils threadUtils;
     Part::TopoShape reducedBasePreviewShape;

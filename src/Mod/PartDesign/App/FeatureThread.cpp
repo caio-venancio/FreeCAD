@@ -88,15 +88,26 @@ Thread::Thread()
     ThreadSize.setEnums(threadUtils.getThreadDiameterLabels(ThreadType.getValue()));
 
     ADD_PROPERTY_TYPE(
+        ThreadSeries,
+        (0L),
+        "Thread",
+        App::Prop_None,
+        QT_TRANSLATE_NOOP("App::Property", "Pitch series")
+    );
+    ThreadSeries.setEnums(threadUtils.getThreadSeries(ThreadType.getValue()));
+
+    ADD_PROPERTY_TYPE(
         ThreadSizePitch,
         (0L),
         "Thread",
         App::Prop_None,
         QT_TRANSLATE_NOOP("App::Property", "Thread size")
     );
-    ThreadSizePitch.setEnums(
-        threadUtils.getThreadPitches(ThreadType.getValue(), ThreadSize.getValue())
-    );
+    ThreadSizePitch.setEnums(threadUtils.getThreadPitches(
+        ThreadType.getValue(),
+        ThreadSize.getValue(),
+        getThreadSeriesName()
+    ));
 
     ADD_PROPERTY_TYPE(
         ThreadDirection,
@@ -147,6 +158,38 @@ Thread::Thread()
         "Thread",
         App::Prop_None,
         QT_TRANSLATE_NOOP("App::Property", "Custom thread clearance (overrides ThreadClass)")
+    );
+
+    ADD_PROPERTY_TYPE(
+        UseCustomThreadPitch,
+        (false),
+        "Thread",
+        App::Prop_None,
+        QT_TRANSLATE_NOOP("App::Property", "Use custom thread pitch")
+    );
+
+    ADD_PROPERTY_TYPE(
+        CustomThreadPitch,
+        (0.0),
+        "Thread",
+        App::Prop_None,
+        QT_TRANSLATE_NOOP("App::Property", "Custom thread pitch (overrides ThreadSizePitch)")
+    );
+
+    ADD_PROPERTY_TYPE(
+        UseCustomThreadSize,
+        (false),
+        "Thread",
+        App::Prop_None,
+        QT_TRANSLATE_NOOP("App::Property", "Use custom thread size (also uses the custom pitch)")
+    );
+
+    ADD_PROPERTY_TYPE(
+        CustomThreadSize,
+        (0.0),
+        "Thread",
+        App::Prop_None,
+        QT_TRANSLATE_NOOP("App::Property", "Custom thread major diameter (overrides ThreadSize)")
     );
 
     ADD_PROPERTY_TYPE(
@@ -215,6 +258,7 @@ Thread::Thread()
 
     try {
         updateThreadClasses();
+        updateCustomPropertyStatus();
     }
     catch (const Base::Exception& e) {
         Base::Console().warning("Thread: %s\n", e.what());
@@ -251,10 +295,13 @@ Thread::ThreadExtent Thread::resolveThreadExtent(const Part::TopoShape& base)
             base,
             ThreadType.getValue(),
             ThreadSize.getValue(),
+            ThreadSizePitch.getValue(),
             IsInternal.getValue(),
             UseCustomThreadClearance.getValue(),
             CustomThreadClearance.getValue(),
-            ThreadClass
+            ThreadClass,
+            getThreadSeriesName(),
+            getCustomThreadValues()
         );
     }
     else if (method == "ThroughAll") {
@@ -322,10 +369,24 @@ try {
     }
     Diameter.setValue(diameter);
 
+    const std::string series = getThreadSeriesName();
+    const ThreadUtils::CustomThreadValues custom = getCustomThreadValues();
+
     int nearestSize = -1;
     int nearestPitch = -1;
     double definedDiameter = 0.0;
-    if (!IsInternal.getValue()) {
+    if (custom.size) {
+        nearestSize = ThreadSize.getValue();
+        definedDiameter = threadUtils.getSupportDiameter(
+            ThreadType.getValue(),
+            ThreadSize.getValue(),
+            ThreadSizePitch.getValue(),
+            IsInternal.getValue(),
+            series,
+            custom
+        );
+    }
+    else if (!IsInternal.getValue()) {
         const std::vector<double> diameters = threadUtils.getThreadDiameterValues(
             ThreadType.getValue()
         );
@@ -338,7 +399,12 @@ try {
         definedDiameter = diameters[nearestSize];
     }
     else {
-        const auto selection = threadUtils.findNearestMinorThreadSize(ThreadType.getValue(), diameter);
+        const auto selection = threadUtils.findNearestMinorThreadSize(
+            ThreadType.getValue(),
+            diameter,
+            series,
+            custom.pitch
+        );
         if (!selection) {
             return new App::DocumentObjectExecReturn(QT_TRANSLATE_NOOP(
                 "Exception",
@@ -359,7 +425,8 @@ try {
 
     const bool isCylindricalSupport = !threadUtils.isConicalFace(LateralFace);
     const bool sizeMismatch = nearestSize != ThreadSize.getValue();
-    const bool pitchMismatch = IsInternal.getValue() && nearestPitch != ThreadSizePitch.getValue();
+    const bool pitchMismatch = IsInternal.getValue() && !custom.pitch
+        && nearestPitch != ThreadSizePitch.getValue();
     const bool diameterMismatch = std::abs(diameter - definedDiameter) > Precision::Confusion();
     if (ModelThread.getValue() && isCylindricalSupport
         && (sizeMismatch || pitchMismatch || diameterMismatch)) {
@@ -381,7 +448,9 @@ try {
                 ThreadType.getValue(),
                 ThreadSize.getValue(),
                 ThreadSizePitch.getValue(),
-                IsInternal.getValue()
+                IsInternal.getValue(),
+                series,
+                custom
             );
             msg += " Try " + formatMillimeters(supportDiameter) + " mm.";
         }
@@ -415,11 +484,7 @@ try {
 
 
         if (ModelThread.getValue()) {
-            const double selectedPitch = threadUtils.getThreadPitch(
-                ThreadType.getValue(),
-                ThreadSize.getValue(),
-                ThreadSizePitch.getValue()
-            );
+            const double selectedPitch = getThreadPitch();
             if (selectedPitch <= Precision::Confusion()) {
                 return new App::DocumentObjectExecReturn(
                     QT_TRANSLATE_NOOP("Exception", "Thread error: Invalid thread pitch")
@@ -448,7 +513,9 @@ try {
                 externalMinorDiameter = threadUtils.getMinorDiameter(
                     ThreadType.getValue(),
                     ThreadSize.getValue(),
-                    ThreadSizePitch.getValue()
+                    ThreadSizePitch.getValue(),
+                    series,
+                    custom
                 );
                 supportDiameter = *externalMinorDiameter;
             }
@@ -464,7 +531,9 @@ try {
                 CustomThreadClearance.getValue(),
                 ThreadClass,
                 true,
-                faceSlope
+                faceSlope,
+                series,
+                custom
             );
             const std::string depthType(DepthType.getValueAsString());
             const bool limitInternalToolToFace = IsInternal.getValue()
@@ -519,7 +588,9 @@ try {
                 UseCustomThreadClearance.getValue(),
                 CustomThreadClearance.getValue(),
                 endTrims.farEnd,
-                usefulThreadLength
+                usefulThreadLength,
+                series,
+                custom
             );
 
             gp_Vec zDirUnit = zDir;
@@ -714,8 +785,33 @@ void Thread::onDocumentRestored()
         }
     }
 
+    if (ThreadType.isValid()) {
+        try {
+            const auto series = threadUtils.getThreadSeries(ThreadType.getValue());
+            if (series != ThreadSeries.getEnumVector()) {
+                const long pitchIndex = ThreadSizePitch.getValue();
+                const std::string savedSeries = getThreadSeriesName();
+                ThreadSeries.setEnums(series);
+                if (!series.empty()) {
+                    const bool keep = std::find(series.begin(), series.end(), savedSeries)
+                        != series.end();
+                    ThreadSeries.setValue(keep ? savedSeries.c_str() : series.front().c_str());
+                }
+                updateThreadSizePitches();
+                if (pitchIndex >= 0
+                    && static_cast<size_t>(pitchIndex) < ThreadSizePitch.getEnumVector().size()) {
+                    ThreadSizePitch.setValue(pitchIndex);
+                }
+            }
+        }
+        catch (const Base::Exception& e) {
+            Base::Console().warning("Thread::onDocumentRestored: %s\n", e.what());
+        }
+    }
+
     try {
         updateThreadClasses();
+        updateCustomPropertyStatus();
     }
     catch (const Base::Exception& e) {
         Base::Console().warning("Thread::onDocumentRestored: %s\n", e.what());
@@ -747,6 +843,32 @@ bool Thread::allowsLeftHand() const
     }
     catch (const Base::Exception&) {
         return true;
+    }
+}
+
+bool Thread::allowsCustomPitch() const
+{
+    if (!ThreadType.isValid() || std::string(ThreadType.getValueAsString()) == "None") {
+        return false;
+    }
+    try {
+        return threadUtils.threadAllowsCustomPitch(ThreadType.getValue());
+    }
+    catch (const Base::Exception&) {
+        return false;
+    }
+}
+
+bool Thread::allowsCustomSize() const
+{
+    if (!ThreadType.isValid() || std::string(ThreadType.getValueAsString()) == "None") {
+        return false;
+    }
+    try {
+        return threadUtils.threadAllowsCustomSize(ThreadType.getValue());
+    }
+    catch (const Base::Exception&) {
+        return false;
     }
 }
 
@@ -810,13 +932,73 @@ std::vector<int> Thread::getThreadTypeGroupMembers(int threadType) const
     }
 }
 
-std::string Thread::getThreadTypeGroupName(int threadType) const
+std::vector<int> Thread::getThreadSeriesGroupMembers(int threadType) const
 {
     try {
-        return threadUtils.getThreadTypeGroupName(threadType);
+        return threadUtils.getThreadSeriesGroupMembers(threadType);
     }
     catch (const Base::Exception&) {
         return {};
+    }
+}
+
+std::string Thread::getThreadStandardName(int threadType) const
+{
+    try {
+        return threadUtils.getThreadStandardName(threadType);
+    }
+    catch (const Base::Exception&) {
+        return {};
+    }
+}
+
+std::vector<double> Thread::getThreadDiameterValues(int threadType) const
+{
+    try {
+        return threadUtils.getThreadDiameterValues(threadType);
+    }
+    catch (const Base::Exception&) {
+        return {};
+    }
+}
+
+std::vector<std::string> Thread::getThreadDiameterLabels(int threadType) const
+{
+    try {
+        return threadUtils.getThreadDiameterLabels(threadType);
+    }
+    catch (const Base::Exception&) {
+        return {};
+    }
+}
+
+std::vector<std::string> Thread::getThreadSeriesForSize(int threadType, int sizeIndex) const
+{
+    try {
+        return threadUtils.getThreadSeriesForSize(threadType, sizeIndex);
+    }
+    catch (const Base::Exception&) {
+        return {};
+    }
+}
+
+std::string Thread::getCustomPitchUnit() const
+{
+    try {
+        return threadUtils.getCustomPitchUnit(ThreadType.getValue());
+    }
+    catch (const Base::Exception&) {
+        return "mm";
+    }
+}
+
+std::string Thread::getCustomSizeUnit() const
+{
+    try {
+        return threadUtils.getCustomSizeUnit(ThreadType.getValue());
+    }
+    catch (const Base::Exception&) {
+        return "mm";
     }
 }
 
@@ -891,7 +1073,9 @@ void Thread::updateThreadDesignation()
             ThreadSize.getValue(),
             ThreadSizePitch.getValue(),
             ThreadDirection.getValue() == 1,
-            threadClass
+            threadClass,
+            getThreadSeriesName(),
+            getCustomThreadValues()
         );
     }
 
@@ -900,9 +1084,119 @@ void Thread::updateThreadDesignation()
     }
 }
 
+std::string Thread::getThreadSeriesName() const
+{
+    return ThreadSeries.isValid() ? std::string(ThreadSeries.getValueAsString()) : std::string();
+}
+
+ThreadUtils::CustomThreadValues Thread::getCustomThreadValues() const
+{
+    ThreadUtils::CustomThreadValues custom;
+    const bool customSize = UseCustomThreadSize.getValue() && allowsCustomSize();
+    if ((UseCustomThreadPitch.getValue() || customSize) && allowsCustomPitch()) {
+        custom.pitch = CustomThreadPitch.getValue();
+    }
+    if (customSize) {
+        custom.size = CustomThreadSize.getValue();
+    }
+    return custom;
+}
+
+void Thread::updateThreadSeries()
+{
+    std::vector<std::string> series;
+    std::vector<std::string> seriesForSize;
+    if (ThreadType.isValid()) {
+        series = threadUtils.getThreadSeries(ThreadType.getValue());
+        if (ThreadSize.isValid()) {
+            seriesForSize
+                = threadUtils.getThreadSeriesForSize(ThreadType.getValue(), ThreadSize.getValue());
+        }
+    }
+
+    const std::string current = getThreadSeriesName();
+    if (series != ThreadSeries.getEnumVector()) {
+        ThreadSeries.setEnums(series);
+    }
+    if (series.empty()) {
+        return;
+    }
+
+    std::string wanted = current;
+    if (!seriesForSize.empty()
+        && std::find(seriesForSize.begin(), seriesForSize.end(), wanted) == seriesForSize.end()) {
+        wanted = seriesForSize.front();
+    }
+    if (std::find(series.begin(), series.end(), wanted) == series.end()) {
+        wanted = series.front();
+    }
+    if (wanted != getThreadSeriesName()) {
+        ThreadSeries.setValue(wanted.c_str());
+    }
+}
+
+void Thread::updateThreadSizePitches()
+{
+    if (!ThreadType.isValid() || !ThreadSize.isValid()) {
+        ThreadSizePitch.setEnums(std::vector<std::string> {});
+        return;
+    }
+    ThreadSizePitch.setEnums(threadUtils.getThreadPitches(
+        ThreadType.getValue(),
+        ThreadSize.getValue(),
+        getThreadSeriesName()
+    ));
+    if (ThreadSizePitch.hasEnums()) {
+        ThreadSizePitch.setValue(0L);
+    }
+}
+
+void Thread::updateCustomPropertyStatus()
+{
+    const bool pitchAllowed = allowsCustomPitch();
+    const bool sizeAllowed = allowsCustomSize();
+    UseCustomThreadPitch.setReadOnly(!pitchAllowed);
+    CustomThreadPitch.setReadOnly(!pitchAllowed);
+    UseCustomThreadSize.setReadOnly(!sizeAllowed);
+    CustomThreadSize.setReadOnly(!sizeAllowed);
+}
+
+void Thread::seedCustomThreadValues()
+{
+    if (!ThreadType.isValid() || !ThreadSize.isValid()) {
+        return;
+    }
+    try {
+        const bool wantsPitch = UseCustomThreadPitch.getValue() || UseCustomThreadSize.getValue();
+        if (wantsPitch && CustomThreadPitch.getValue() <= 0.0) {
+            const double pitch = threadUtils.getThreadPitch(
+                ThreadType.getValue(),
+                ThreadSize.getValue(),
+                ThreadSizePitch.getValue(),
+                getThreadSeriesName()
+            );
+            if (pitch > 0.0) {
+                CustomThreadPitch.setValue(pitch);
+            }
+        }
+        if (UseCustomThreadSize.getValue() && CustomThreadSize.getValue() <= 0.0) {
+            const auto diameters = threadUtils.getThreadDiameterValues(ThreadType.getValue());
+            const long size = ThreadSize.getValue();
+            if (size >= 0 && static_cast<size_t>(size) < diameters.size()) {
+                CustomThreadSize.setValue(diameters[size]);
+            }
+        }
+    }
+    catch (const Base::Exception& e) {
+        Base::Console().warning("Thread: %s\n", e.what());
+    }
+}
+
 void Thread::onChanged(const App::Property* prop)
 try {
-    if (isRestoring() && (prop == &ThreadType || prop == &IsInternal || prop == &ThreadSize)) {
+    if (isRestoring()
+        && (prop == &ThreadType || prop == &IsInternal || prop == &ThreadSize
+            || prop == &ThreadSeries)) {
         DressUp::onChanged(prop);
         return;
     }
@@ -917,18 +1211,14 @@ try {
                 if (!ThreadSize.isValid() && ThreadSize.hasEnums()) {
                     ThreadSize.setValue(0L);
                 }
-                if (ThreadSize.isValid()) {
-                    ThreadSizePitch.setEnums(
-                        threadUtils.getThreadPitches(ThreadType.getValue(), ThreadSize.getValue())
-                    );
-                    if (ThreadSizePitch.hasEnums()) {
-                        ThreadSizePitch.setValue(0L);
-                    }
-                }
+                updateThreadSeries();
+                updateThreadSizePitches();
+                updateCustomPropertyStatus();
             }
         }
         else {
             ThreadSize.setEnums(std::vector<std::string> {});
+            ThreadSeries.setEnums(std::vector<std::string> {});
             ThreadSizePitch.setEnums(std::vector<std::string> {});
             ThreadClass.setEnums(ThreadUtils::ThreadClass_None_Enums);
             ThreadDesignation.setValue("---");
@@ -949,12 +1239,21 @@ try {
             DressUp::onChanged(prop);
             return;
         }
-        ThreadSizePitch.setEnums(
-            threadUtils.getThreadPitches(ThreadType.getValue(), ThreadSize.getValue())
-        );
-        if (ThreadSizePitch.hasEnums()) {
-            ThreadSizePitch.setValue(0L);
+        updateThreadSeries();
+        updateThreadSizePitches();
+        updateThreadDesignation();
+    }
+    else if (prop == &ThreadSeries) {
+        updateThreadSizePitches();
+        updateThreadDesignation();
+    }
+    else if (prop == &UseCustomThreadPitch || prop == &UseCustomThreadSize) {
+        if (!isRestoring()) {
+            seedCustomThreadValues();
         }
+        updateThreadDesignation();
+    }
+    else if (prop == &CustomThreadPitch || prop == &CustomThreadSize) {
         updateThreadDesignation();
     }
     else if (prop == &ThreadSizePitch || prop == &ThreadDirection || prop == &ThreadClass) {
@@ -1031,14 +1330,34 @@ try {
 
         IsInternal.setValue(isInternal);
 
+        const ThreadUtils::CustomThreadValues custom = getCustomThreadValues();
+        if (custom.size) {
+            const double size = IsInternal.getValue()
+                ? threadUtils.getMajorDiameterForMinor(
+                      ThreadType.getValue(),
+                      diameter,
+                      *custom.pitch
+                  )
+                : diameter;
+            if (std::abs(size - CustomThreadSize.getValue()) > Precision::Confusion()) {
+                CustomThreadSize.setValue(size);
+            }
+            DressUp::onChanged(prop);
+            return;
+        }
+
         int nearestSize = -1;
         int nearestPitch = -1;
         if (!IsInternal.getValue()) {
             nearestSize = threadUtils.findNearestThreadSize(ThreadType.getValue(), diameter);
         }
         else {
-            const auto selection
-                = threadUtils.findNearestMinorThreadSize(ThreadType.getValue(), diameter);
+            const auto selection = threadUtils.findNearestMinorThreadSize(
+                ThreadType.getValue(),
+                diameter,
+                getThreadSeriesName(),
+                custom.pitch
+            );
             if (selection) {
                 nearestSize = selection->sizeIndex;
                 nearestPitch = selection->pitchIndex;
@@ -1051,8 +1370,11 @@ try {
             ThreadSize.setValue(nearestSize);
         }
         if (nearestPitch >= 0 && ThreadSize.isValid()) {
-            const auto pitches
-                = threadUtils.getThreadPitches(ThreadType.getValue(), ThreadSize.getValue());
+            const auto pitches = threadUtils.getThreadPitches(
+                ThreadType.getValue(),
+                ThreadSize.getValue(),
+                getThreadSeriesName()
+            );
             if (static_cast<size_t>(nearestPitch) < pitches.size()
                 && nearestPitch != ThreadSizePitch.getValue()) {
                 ThreadSizePitch.setValue(nearestPitch);
@@ -1098,8 +1420,13 @@ std::vector<gp_Pnt> Thread::getThreadLocations() const
 
 double Thread::getThreadPitch() const
 {
-    return threadUtils
-        .getThreadPitch(ThreadType.getValue(), ThreadSize.getValue(), ThreadSizePitch.getValue());
+    return threadUtils.getThreadPitch(
+        ThreadType.getValue(),
+        ThreadSize.getValue(),
+        ThreadSizePitch.getValue(),
+        getThreadSeriesName(),
+        getCustomThreadValues()
+    );
 }
 
 std::optional<gp_Dir> Thread::getThreadNormal() const
